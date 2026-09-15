@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -69,12 +70,18 @@ class Job(Base):
 
 
 # Review queue: a match becomes an application only once the user submits it themselves.
-STATUS_MATCHED = "matched"
-STATUS_DRAFTED = "drafted"
-STATUS_SUBMITTED = "submitted"
-STATUS_REJECTED = "rejected"
-STATUS_INTERVIEW = "interview"
-STATUS_DISCARDED = "discarded"
+# Valid transitions between these are enforced in the applications API, not here.
+class ApplicationStatus(str, Enum):
+    MATCHED = "matched"
+    DRAFTED = "drafted"
+    SUBMITTED = "submitted"
+    REJECTED = "rejected"
+    INTERVIEW = "interview"
+    DISCARDED = "discarded"
+
+    def __str__(self) -> str:
+        # Plain Enum.__str__ would print "ApplicationStatus.MATCHED"; this keeps it "matched".
+        return self.value
 
 
 class Application(Base):
@@ -85,7 +92,7 @@ class Application(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
 
-    status: Mapped[str] = mapped_column(String(32), default=STATUS_MATCHED, index=True)
+    status: Mapped[str] = mapped_column(String(32), default=ApplicationStatus.MATCHED, index=True)
     score: Mapped[float] = mapped_column(Float, default=0)
     match_reason: Mapped[str] = mapped_column(Text, default="")
     cover_letter: Mapped[str] = mapped_column(Text, default="")
