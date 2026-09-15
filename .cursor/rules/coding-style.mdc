@@ -1,0 +1,42 @@
+---
+description: Core coding standards for this project
+alwaysApply: true
+---
+
+# Coding Standards
+
+## No emojis in code
+
+Never put emojis in source code, comments, log messages, commit messages, or CLI
+output. Plain text only.
+
+## Simplest thing that works
+
+Build only what the current task needs.
+
+- No abstraction layers, interfaces, or config options with a single use.
+- No frameworks or dependencies when a few lines of standard library do the job.
+- No speculative features, hooks, or "we might need this later" parameters.
+- Prefer a plain function over a class, a class over a hierarchy.
+
+If a solution needs a diagram to explain, it is probably too complex.
+
+## Comments explain thinking, not code
+
+Code should be readable enough that most functions need no comment at all. Write a
+comment only to capture something the code cannot show: a non-obvious constraint, a
+tradeoff, a workaround for external behavior, or why an obvious approach was rejected.
+
+```python
+# BAD - restates the code
+# increment the counter by one
+counter += 1
+
+# GOOD - explains hidden logic
+# The API returns 429 without Retry-After, so back off on a fixed schedule.
+time.sleep(BACKOFF_SECONDS)
+```
+
+No docstrings that repeat the signature, no section banners, no commented-out code.
+When a comment is needed to explain what a block does, rename things or extract a
+function instead.

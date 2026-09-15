@@ -1,0 +1,29 @@
+---
+description: Keep living documentation that a future agent can start work from
+alwaysApply: true
+---
+
+# Documentation for Agents
+
+Every subsystem has a doc written for someone with zero context about this project.
+
+- `AGENTS.md` at the repo root is the index: the stack, how to run both halves, and links
+  into `docs/`.
+- One file per subsystem: `docs/auth.md`, `docs/sources.md`, `docs/matching.md`, and so on.
+- The doc is updated in the same change as the code. A feature is not done until its doc
+  matches what was built.
+
+## What belongs in a subsystem doc
+
+- What the subsystem is for, in a sentence or two.
+- Where its code lives and what data it owns.
+- The contract other code depends on.
+- Constraints and decisions the code cannot show on its own, for example that eJobs pages
+  are fetched one per second deliberately, or that account linking requires a verified
+  email.
+
+## What does not belong
+
+- Restating the code or listing every function. The code is the reference, the doc is the
+  map to it.
+- Changelogs, task history, or status updates. Docs describe how the system works now.

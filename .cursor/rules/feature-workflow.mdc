@@ -1,0 +1,35 @@
+---
+description: How to build a feature - split it across subagents, integrate as lead
+alwaysApply: true
+---
+
+# Feature Workflow
+
+## Delegate, then integrate
+
+When a feature has two or more independent pieces, the lead agent splits it, launches one
+subagent per piece, and integrates the results itself.
+
+The lead owns:
+
+- The split, and the contracts between pieces: types, function signatures, endpoints.
+  Contracts are decided before any subagent starts, never negotiated between them.
+- Integration, running the app, and the final review.
+- Keeping the docs index current.
+
+Every subagent prompt states:
+
+- The goal, and the exact files that subagent owns. It must not edit anything outside them.
+- The contract it implements, written out verbatim rather than described.
+- Which docs to read first.
+- How to verify its own work, and what done looks like.
+
+## When not to delegate
+
+Single-file changes, bug fixes, and anything under roughly thirty minutes. Briefing an
+agent costs more than doing the work.
+
+## Integration is not optional
+
+Subagent output is a proposal until the lead has run the whole thing and seen it work.
+Never merge parallel work and declare it done without executing it.
