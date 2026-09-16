@@ -5,12 +5,17 @@ letters, and track applications.
 
 ## Stack
 
-- Backend: FastAPI, SQLAlchemy 2, SQLite, in `backend/`
+- Backend: FastAPI, SQLAlchemy 2, in `backend/`
 - Frontend: Vite, React, TypeScript, Tailwind, in `frontend/` (not scaffolded yet)
 - Auth: Google OpenID Connect. Accounts are an email plus `identities` rows. There
   is no password column.
+- Target platform: Google Cloud Platform in `europe-west1`. Cloud Run, Cloud SQL for
+  PostgreSQL, Cloud Storage, Vertex AI. See [PLAN.md](PLAN.md) section 4.
 
 ## Running the backend
+
+The backend currently runs directly on the host against SQLite. Phase 5 replaces this
+with Docker Compose and PostgreSQL; until then:
 
 ```
 cd backend
@@ -27,8 +32,15 @@ CORS is locked to `FRONTEND_ORIGIN` (default `http://localhost:5173`).
 Sign-in: set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `backend/.env`, then
 open `http://localhost:8000/api/auth/google/login`.
 
-There is no Alembic. `Base.metadata.create_all` runs on startup. If the schema changes
-during early development, delete `backend/cv_applier.db` and restart.
+There is no Alembic yet. `Base.metadata.create_all` runs on startup. If the schema
+changes before phase 5, delete `backend/cv_applier.db` and restart. Phase 5 replaces
+both of those with migrations, for the reasons in [LEARNING.md](LEARNING.md) entry 20.
+
+## Cloud
+
+Nothing is deployed. No GCP project exists yet and nothing is being billed. The design,
+the cost model and the credit constraints are in [PLAN.md](PLAN.md) section 4; the
+commands that create each resource are in [BUILD.md](BUILD.md) phases 4, 12 to 15.
 
 ## Docs
 
@@ -39,3 +51,4 @@ describe.
 - Design: [PLAN.md](PLAN.md)
 - Phase checklist: [BUILD.md](BUILD.md)
 - Live phase status: [PROGRESS.md](PROGRESS.md)
+- Why the code looks like this: [LEARNING.md](LEARNING.md)
