@@ -934,6 +934,309 @@ the app container, reports the applied revision.
 
 ---
 
+## 21. Provision GCP with Terraform, not the console or one-off commands
+
+**Phase**: 4, GCP project and guardrails. Not built yet.
+
+**The problem**: Every resource so far has been described in this document as a `gcloud`
+command or a console click-path. Both work, and both share the same failure mode: the
+only record of what exists is either your memory of what you ran, or nothing at all if you
+clicked it. Rebuilding the project after deleting it, or explaining to a future reader
+exactly what state GCP is in, means re-deriving it from prose.
+
+**What we did**: Every GCP resource in this project - APIs, the service account and its
+roles, Cloud SQL, the buckets, Secret Manager containers, Cloud Run, the scheduler - is
+declared in Terraform, across the two modules `infra/bootstrap/` and `infra/main/`
+described in entry 22. `terraform plan` shows what would change before anything does, and
+`terraform apply` is the only command that touches real infrastructure. `gcloud` remains
+for the handful of things that are not desired state - running a migration, pushing an
+image, executing a job by hand - and for the one seed step Terraform cannot do for itself.
+
+**Why not the obvious alternative**: Clicking through the console is genuinely faster for
+a single resource, has autocomplete for every field, and needs no tool installed. For a
+project this size, typing the equivalent `gcloud` commands from this document is almost as
+fast as writing the Terraform for the same resource. Both are real costs against a real
+benefit, which is why this entry exists rather than being assumed.
+
+**The concept**: Infrastructure as code means the desired state of the system is a text
+file, checked into version control, and a tool reconciles reality to match it rather than
+a person performing steps. The distinction worth holding onto is declarative versus
+imperative: a `gcloud` command is an instruction, "do this," which says nothing about what
+should be true afterward and nothing about what else might already be true; a Terraform
+resource block is an assertion, "this should exist, configured exactly this way," and the
+tool works out the steps. That difference is what makes `terraform plan` a dry run with
+teeth: it diffs desired state against real state and shows the exact change before you
+approve it, which a `gcloud` command or a console click never offers. It is also what
+makes the whole project reproducible from a fresh checkout instead of from a person's
+memory of what they ran, and reviewable as a diff instead of invisible. The same shift is
+why Kubernetes manifests replaced kubectl-run scripts, why CloudFormation and Terraform
+both outcompeted click-ops at any team size, and why "configuration drift" - the state of
+things quietly diverging from what anyone intended - is a named failure mode with tooling
+built specifically to detect it.
+
+**Expires when**: a second person needs to change this infrastructure at the same time, at
+which point state locking and a review step in CI matter more than they do for one person
+applying from a laptop.
+
+**See it yourself**: not runnable yet. After phase 4, `terraform -chdir=infra/main plan`
+with no pending changes prints "No changes," which is the tool asserting that reality
+matches the file, not a guess.
+
+---
+
+## 22. Split Terraform into a bootstrap module and a main module
+
+**Phase**: 4, GCP project and guardrails. Not built yet.
+
+**The problem**: Terraform needs somewhere to store its own state - the record of what it
+created and with what configuration - and the natural place is a GCS bucket in this same
+project. That bucket does not exist until Terraform creates it, which means the very first
+`terraform apply` needs a backend that does not exist yet, created by the tool that needs
+the backend to run.
+
+**What we did**: Two Terraform root modules that never share a state file.
+`infra/bootstrap/` runs first, with local state, because the one thing it creates is the
+`cv-applier-tfstate-PROJECT_ID` bucket, plus the budget and the handful of APIs
+bootstrapping itself needs. Once that bucket exists, bootstrap adds a `backend "gcs"`
+block pointing at its own creation and `terraform init -migrate-state` moves its state off
+the laptop and into the bucket, closing the loop. `infra/main/` never has this problem: it
+points at the same bucket under a different prefix from its very first `init`, and holds
+everything else - the runtime service account, Cloud SQL, the uploads bucket, Cloud Run,
+the scheduler. `main` also never gets permission to create or move its own backend; the
+bucket it depends on is not one of the resources it manages.
+
+**Why not the obvious alternative**: One module, with local state, is the simplest thing
+that could work and is exactly how every Terraform tutorial starts. It works until the
+laptop is unavailable, at which point the state - the only record of what exists and how
+it maps to the `.tf` files - is unavailable with it, and "reproducible at any time"
+quietly becomes "reproducible if this one laptop survives."
+
+**The concept**: This is a specific, well-known instance of a bootstrapping problem: a
+system that needs infrastructure to manage infrastructure cannot use that infrastructure
+for its own first step. The general answer is the same everywhere it appears - a compiler
+that compiles itself needs an earlier compiler to build the first version, a blockchain's
+genesis block has no previous block to reference, a new Kubernetes cluster needs something
+outside the cluster to create the cluster - which is to shrink the unavoidable manual or
+external part to the smallest possible seed and be explicit about exactly what it is,
+rather than pretending the whole system is self-hosting from step one. The second reason
+for the split, independent of the chicken-and-egg problem, is privilege separation: the
+service account that manages application infrastructure should not also be able to
+relocate or delete the record of what that infrastructure is, the same way a database's
+application user should not hold permission to drop its own audit log.
+
+**Expires when**: the project moves to a team or a CI pipeline running `terraform apply`,
+at which point state locking and a dedicated Terraform service account, rather than
+personal ADC credentials, become worth the setup cost.
+
+**See it yourself**: not runnable yet. After phase 4,
+`gcloud storage ls gs://cv-applier-tfstate-PROJECT_ID/` lists a `bootstrap/` and a `main/`
+prefix, each holding its own state, and nothing under either exists on disk.
+
+---
+
+## 23. Keep Terraform state in a dedicated bucket, never beside app data
+
+**Phase**: 4, GCP project and guardrails. Not built yet.
+
+**The problem**: Terraform's state file is a JSON record of every resource it manages and
+every attribute Terraform read back about it, which by phase 13 includes the Cloud SQL
+connection name embedded in a database URL and, if `db_password` is supplied as a
+Terraform variable, the password itself. It needs to live somewhere.
+
+**What we did**: A bucket that exists for exactly one purpose,
+`cv-applier-tfstate-PROJECT_ID`, separate from `cv-applier-uploads-PROJECT_ID` where CVs
+land, with versioning turned on and uniform bucket-level access. No application code ever
+reads or writes to it; only Terraform does, running as whoever's ADC credentials are
+applying at the time.
+
+**Why not the obvious alternative**: One bucket for everything is one fewer resource to
+create and one fewer name to remember, and one already existed for uploads by phase 12.
+The two have nothing in common once you ask who should be allowed to read them: a CV is
+one user's document, and state is a record that can contain infrastructure credentials, so
+a bucket policy generous enough for the first is already too generous for the second.
+
+**The concept**: State deserves the same instinct as a secret, because in this project it
+sometimes is one: a database password lives there the moment any resource references it,
+whether or not it looks like a credential in the `.tf` file that produced it. Remote state,
+kept in a bucket rather than on a laptop, solves reproducibility, but reproducibility and
+confidentiality are different axes and a fix for one says nothing about the other. The two
+mitigations here address them separately: a dedicated bucket with narrow IAM limits who
+can read a file that might contain a credential, and versioning is a rollback path if a bad
+apply overwrites good state, the infrastructure equivalent of entry 15's argument for
+immutable, addressable artifacts over one mutable `:latest` pointer. Terraform Cloud and
+Terraform Enterprise exist substantially to formalise this exact concern - encrypted
+state, audited access, locking - for teams past the point where a bucket and a habit are
+enough.
+
+**Expires when**: state needs to be read by more than one person or CI pipeline at a time,
+which is when state locking (the GCS backend supports it natively) starts mattering, or
+when a secret genuinely needs to be kept out of state entirely rather than just
+access-controlled, which is entry 24.
+
+**See it yourself**: not runnable yet. After phase 4,
+`gcloud storage buckets describe gs://cv-applier-tfstate-PROJECT_ID --format="value(versioning.enabled)"`
+prints `True`, and `gcloud storage buckets get-iam-policy gs://cv-applier-tfstate-PROJECT_ID`
+lists only your own account, not the runtime service account - the application has no
+business reading its own infrastructure's state.
+
+---
+
+## 24. Keep secret values out of Terraform; containers only
+
+**Phase**: 4 and 12, GCP project and guardrails; data plane. Not built yet.
+
+**The problem**: Secret Manager, Cloud SQL users, and Cloud Run's environment all need
+real values eventually - a JWT signing secret, a database password, an OAuth client
+secret - and Terraform can create all three kinds of resource. Writing the value directly
+into a resource block is the shortest path from "I have a secret" to "it is deployed."
+
+**What we did**: A single rule, applied everywhere a secret shows up: Terraform manages
+the *container*, never the *value*. `google_secret_manager_secret` resources create empty
+`jwt-secret` and `google-client-secret` entries with no version; the actual bytes are set
+afterward with `gcloud secrets versions add`. The Cloud SQL user and its password are
+created with `gcloud sql users create`, never a Terraform resource. Cloud Run reads the
+two Secret Manager values through `value_source.secret_key_ref`, so the running service
+never has the value typed into a `.tf` file either. The one deliberate exception is the
+database password inside `DATABASE_URL`, which does land in Terraform state because Cloud
+Run needs the whole connection string as one value - entry 11 already accepted this same
+value sitting in a `--set-env-vars` string before Terraform existed in this plan, so
+nothing new is exposed, only relocated.
+
+**Why not the obvious alternative**: A `sensitive = true` Terraform variable feels like it
+solves this, and it solves one thing: it hides the value from `plan` and `apply` output on
+your screen. It does not touch state, which is written as plain JSON regardless of any
+`sensitive` flag on the variable that produced a value, so a secret passed this way is
+exactly as exposed in the state file as if it had been typed in literally.
+
+**The concept**: Terraform state is not a secrets manager and was never designed as one;
+it is a cache of the last-known-real values of everything Terraform touches, stored as
+plain text by default because the tool's job is diffing and applying, not access control.
+The `sensitive` flag is a display feature, not a security boundary - a distinction worth
+learning once here rather than by finding a password with `grep` in a `.tfstate` file
+later. The safer design is not to encrypt or restrict the container that might hold a
+credential, though the narrow bucket IAM from entry 23 does that too as a second layer,
+but to make sure the credential is never handed to that container in the first place. This
+is the same instinct as entry 12's refusal to download a service-account key: the
+strongest protection for a secret is one that never has to be protected because it does
+not exist in that form.
+
+**Expires when**: a secret needs to be created *by* Terraform because no human step should
+exist to set it - for example, a per-environment password generated fresh on every
+`apply`. That is a real use case (Terraform's `random_password` resource exists for it),
+and taking it means accepting the value in state and compensating with tighter state
+access, not pretending the trade disappeared.
+
+**See it yourself**: not runnable yet. After phase 12,
+`terraform -chdir=infra/main state show google_secret_manager_secret.jwt` prints the
+container's metadata and no value, because there is no value in that resource to print;
+`gcloud secrets versions access latest --secret=jwt-secret` is the only command in this
+project that can produce the real one.
+
+---
+
+## 25. Let Terraform own the Cloud Run service, but not its image
+
+**Phase**: 13, first deploy. Not built yet.
+
+**The problem**: The Cloud Run service is created once, in Terraform, and then redeployed
+on every push by Cloud Build for the rest of the project's life, which means two systems
+both have an opinion about the same resource's container image: the `.tf` file says
+whatever tag was current when it was last edited, and the live service says whatever
+Cloud Build most recently pushed to it.
+
+**What we did**: `lifecycle { ignore_changes = [template[0].containers[0].image] }` on the
+`google_cloud_run_v2_service` resource. Terraform still creates the service - the scaling
+bounds, the service account, the environment variables, the Cloud SQL volume - and simply
+stops tracking that one field once the service exists, leaving Cloud Build free to change
+it on every deploy without Terraform trying to put it back. The Cloud Run job in phase 14
+needs the identical treatment, one nesting level deeper, because a job's execution
+template sits inside its job template where a service has only one level;
+`ignore_changes = [template[0].template[0].containers[0].image]` is the line that
+actually matches, and the service's own path silently matches nothing on a job.
+
+**Why not the obvious alternative**: Letting one system own the whole resource is the
+clean answer on paper: either Terraform deploys every image, or Cloud Run is not in
+Terraform at all and every setting is pushed via `gcloud`. The first throws away the reason
+Cloud Build exists, fast automatic deploys on every push without a local Terraform run; the
+second throws away everything else this entry's siblings give the rest of the resource -
+review, reproducibility, a plan before a change.
+
+**The concept**: This is drift by design rather than drift by accident, and the fix is to
+tell the tool which field it does not own rather than fighting it. `ignore_changes` splits
+ownership of one resource across two systems along a field boundary: Terraform owns the
+shell - everything that should look the same on the next `apply` regardless of what has
+deployed since - and the CI pipeline owns the one field that changes on a schedule
+Terraform is not part of. The same shape appears wherever infrastructure-as-code and
+continuous deployment touch the same object: an ECS task definition's image tag managed
+outside the Terraform-defined service, a Kubernetes Deployment's image field left to Argo
+CD or Flux while Terraform or Helm owns the rest of the manifest. The sharp edge worth
+carrying forward is that `ignore_changes` is a planning-time filter, not an apply-time
+guarantee: the provider sends the whole resource definition on every update, so applying a
+plan that was computed before the last external deploy can still roll the image backward.
+The rule that avoids this is procedural, not technical - always `plan` and `apply`
+together, against fresh state, never from a saved plan file that might predate the last
+deploy.
+
+**Expires when**: the deploy pipeline and the Terraform apply need to be the same
+operation, for example if deploys should themselves go through a review step. At that
+point the image belongs in the `.tf` file and Terraform apply becomes the deploy
+mechanism, which is a valid design, just a different one from this project's.
+
+**See it yourself**: not runnable yet. After phase 15, push a trivial change to `main`,
+let it deploy, then run `terraform -chdir=infra/main plan`: it should report no change to
+the Cloud Run service at all, despite the live image having just changed underneath it.
+
+---
+
+## 26. Accept one console step: GitHub's own authorization for Cloud Build
+
+**Phase**: 15, deploy on push. Not built yet.
+
+**The problem**: A Cloud Build trigger needs to read a GitHub repository and receive its
+push events, which means something has to prove to GitHub that Cloud Build is allowed to
+see this repository. That proof is an authorization grant, and it is GitHub's flow, not
+Google's.
+
+**What we did**: One console step, done once: under Cloud Build, Repositories, Connect
+Repository, GitHub (2nd generation), which installs Google's Cloud Build GitHub App on the
+repository. Everything downstream of that grant is Terraform: the connection it creates is
+read back with a `data "google_cloudbuildv2_connection"` block rather than a resource,
+because Terraform never created it and importing something you are about to read as a
+data source anyway adds a step for no benefit, and the repository reference and the
+trigger built on top of that data source are ordinary managed resources.
+
+**Why not the obvious alternative**: Forcing this into Terraform is possible in the narrow
+technical sense - `google_cloudbuildv2_connection` is a real resource, and it accepts a
+GitHub App installation id and an OAuth token - but both of those inputs have to come from
+somewhere, and that somewhere is the same interactive GitHub authorization this entry is
+about. Wrapping it in a resource block would not remove the manual step, it would just
+hide it one layer down and add the risk of a stored token going stale silently.
+
+**The concept**: Not every integration between two systems has an API-shaped equivalent of
+a click. GitHub's App installation flow exists specifically so a human, logged into GitHub,
+can see and approve exactly what access is being granted to exactly which repositories,
+and short-circuiting that with a script is either impossible or a worse version of the
+same grant with none of the visibility. The honest bar for infrastructure-as-code is
+"everything that can reasonably be declarative," not "everything," and telling the two
+apart is a judgment call that improves with exposure to more of these boundaries, not a
+rule that can be looked up. The corollary worth carrying forward is what to do once you
+find one of these seams: not to fight it, but to shrink it to its smallest form, one click,
+noted down, and hand Terraform a read-only view of the result, which is exactly entry 22's
+answer to the project-creation seed applied to a different boundary.
+
+**Expires when**: GitHub or Google ships a fully non-interactive, API-driven equivalent of
+the App installation grant - a service-to-service credential exchange with no human
+approval step - at which point this stops being a real exception and becomes just another
+resource.
+
+**See it yourself**: not runnable yet. After phase 15,
+`terraform -chdir=infra/main state list | grep cloudbuild` lists the repository and the
+trigger as managed resources; the connection itself is absent from that list because it
+was always a data source, and `gcloud builds connections describe cv-applier-github
+--region=europe-west1` is what actually shows it exists.
+
+---
+
 ## How this file is maintained
 
 An entry is appended in the same change as the work it describes, at the moment the

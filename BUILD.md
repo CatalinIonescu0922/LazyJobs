@@ -25,8 +25,16 @@ endpoint.
 
 ## Prerequisites
 
-Install the `gcloud` CLI, Docker with Compose, Python 3.12 and Node 20. A Google Cloud
-billing account with the $300 / 90-day free trial credit is assumed.
+Install the `gcloud` CLI, Terraform, Docker with Compose, Python 3.12 and Node 20. A
+Google Cloud billing account with the $300 / 90-day free trial credit is assumed.
+
+From phase 4 on, the two CLIs have different jobs and the split is deliberate: Terraform
+declares anything that should still exist tomorrow - APIs enabled, service accounts,
+databases, buckets, the Cloud Run service itself - and `gcloud` is left for one-off
+operations (running a migration through a proxy, pushing an image, executing a job by
+hand) and the couple of things Terraform genuinely cannot do for itself. A resource that
+appears in a `.tf` file and a resource that appears as a `gcloud` command in this
+document are different categories on purpose, not an inconsistency.
 
 The Google Cloud project comes first, because the OAuth client used for sign-in is a
 credential inside it. Phase 4 creates that project. Once it exists:
@@ -216,10 +224,14 @@ Effort: 2 hours, most of it Google Console setup and redirect URI typos.
 ## Phase 4. GCP project and guardrails
 
 **Goal** - a project with a spending alarm, the APIs it will need switched on, a runtime
-identity, and working credentials on your laptop. Nothing chargeable is created here.
+identity, and working credentials on your laptop, all of it defined in Terraform except
+the one step Terraform cannot do for itself. Nothing chargeable is created here.
 
-**Files** - `docs/cloud.md`, edit `backend/requirements.txt` (add `google-genai`), edit
-`backend/.env.example`.
+**Files** - `infra/bootstrap/main.tf`, `infra/bootstrap/variables.tf`,
+`infra/bootstrap/outputs.tf`, `infra/main/main.tf`, `infra/main/variables.tf`, edit
+`.gitignore` (add `infra/**/.terraform/`, `infra/**/*.tfstate*`,
+`infra/**/terraform.tfvars`), `docs/cloud.md`, edit `backend/requirements.txt` (add
+`google-genai`), edit `backend/.env.example`.
 
 Sign in and create the project. The project id is globally unique and permanent, so pick
 something like `cv-applier-<yourname>`.
@@ -238,64 +250,189 @@ gcloud billing accounts list
 gcloud billing projects link PROJECT_ID --billing-account=BILLING_ACCOUNT_ID
 ```
 
-Set the budget **before** creating anything else. This is the one step that is worthless
-if done later, because its whole purpose is to catch a mistake made in a phase that has
-not happened yet. The budget command needs its own API on first use:
+That is the only hand-run infrastructure step in this whole project. Terraform's own
+provider needs a quota project attached to your credentials before it can call any
+Google API, and before a project exists there is nothing to attach it to - the same
+requirement `gcloud auth application-default set-quota-project` satisfies further down
+for the application's own credentials. Everything from here is Terraform, in two root
+modules that never share a state file.
+
+### `infra/bootstrap/`
+
+Runs first, because it creates the bucket that will hold every module's state, including
+its own. Until that bucket exists, its state has nowhere to live but your laptop.
+
+`infra/bootstrap/main.tf`:
+
+```hcl
+terraform {
+  required_version = ">= 1.9"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 7.44"
+    }
+  }
+}
+
+provider "google" {
+  project               = var.project_id
+  region                = "europe-west1"
+  billing_project       = var.project_id
+  user_project_override = true
+}
+
+resource "google_project_service" "bootstrap_apis" {
+  for_each = toset([
+    "cloudresourcemanager.googleapis.com",
+    "serviceusage.googleapis.com",
+    "billingbudgets.googleapis.com",
+    "storage.googleapis.com",
+  ])
+  service = each.value
+}
+
+resource "google_storage_bucket" "tfstate" {
+  name                        = "cv-applier-tfstate-${var.project_id}"
+  location                    = "europe-west1"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = false
+  versioning { enabled = true }
+  depends_on                  = [google_project_service.bootstrap_apis]
+}
+
+resource "google_billing_budget" "guardrail" {
+  billing_account = var.billing_account_id
+  display_name    = "cv-applier"
+  amount {
+    specified_amount {
+      currency_code = "USD"
+      units         = "50"
+    }
+  }
+  threshold_rules { threshold_percent = 0.5 }
+  threshold_rules { threshold_percent = 0.9 }
+  threshold_rules { threshold_percent = 1.0 }
+  depends_on = [google_project_service.bootstrap_apis]
+}
+```
+
+`billing_project` and `user_project_override` on the provider block exist for exactly one
+resource above: `google_billing_budget` calls the Billing Budgets API under your own ADC
+user credentials, and returns a 403 without a quota project attached. `variables.tf`
+declares `project_id` and `billing_account_id` with no defaults; put real values in a
+gitignored `infra/bootstrap/terraform.tfvars` rather than typing them on every command.
+`outputs.tf` exposes the bucket name for later reference:
+
+```hcl
+output "tfstate_bucket" {
+  value = google_storage_bucket.tfstate.name
+}
+```
+
+Apply with local state, because the backend bucket does not exist yet:
 
 ```
-gcloud services enable billingbudgets.googleapis.com
-
-gcloud billing budgets create \
-  --billing-account=BILLING_ACCOUNT_ID \
-  --display-name="cv-applier" \
-  --budget-amount=50USD \
-  --threshold-rule=percent=0.5 \
-  --threshold-rule=percent=0.9 \
-  --threshold-rule=percent=1.0
+cd infra/bootstrap
+terraform init
+terraform apply
 ```
 
-A budget alert emails you at 50%, 90% and 100% of $50. It does not cap anything. Nothing
-is switched off when the threshold is crossed, so treat the first mail as the signal to
-go and look, not as a safety net that already acted.
+Then close the loop: point bootstrap's own state at the bucket it just created, so it
+stops living only on your laptop. Add to `infra/bootstrap/main.tf`:
 
-Enable the APIs the later phases need. Each one is off by default and the error you get
-without it names the API, so this list is only here to save round trips.
-
-```
-gcloud services enable \
-  run.googleapis.com \
-  sqladmin.googleapis.com \
-  storage.googleapis.com \
-  aiplatform.googleapis.com \
-  secretmanager.googleapis.com \
-  cloudbuild.googleapis.com \
-  artifactregistry.googleapis.com \
-  cloudscheduler.googleapis.com
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "cv-applier-tfstate-PROJECT_ID"
+    prefix = "bootstrap"
+  }
+}
 ```
 
-Create the identity the deployed app will run as, and grant it the three project-level
-roles it needs. The fourth role, `roles/storage.objectAdmin`, is granted in phase 12 on
-the bucket alone rather than project-wide, so the app can write CVs and nothing else.
-
 ```
-gcloud iam service-accounts create cv-applier-run --display-name="CV Applier runtime"
-
-gcloud projects add-iam-policy-binding PROJECT_ID \
-  --member="serviceAccount:cv-applier-run@PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/cloudsql.client"
-
-gcloud projects add-iam-policy-binding PROJECT_ID \
-  --member="serviceAccount:cv-applier-run@PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/aiplatform.user"
-
-gcloud projects add-iam-policy-binding PROJECT_ID \
-  --member="serviceAccount:cv-applier-run@PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
+terraform init -migrate-state
 ```
 
-Set up Application Default Credentials so local code authenticates as you, with no key
-file anywhere on disk. On Cloud Run the same code picks up the attached service account
-instead, which is why no service-account JSON key is ever downloaded in this project.
+Confirm "yes" when prompted. Only bootstrap ever does this local-then-migrate dance,
+because only bootstrap has the chicken-and-egg problem; `infra/main/` uses the same
+bucket under a different prefix and has remote state from its very first `init`.
+
+### `infra/main/`
+
+`infra/main/main.tf` handles the remaining APIs and the runtime identity:
+
+```hcl
+terraform {
+  required_version = ">= 1.9"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 7.44"
+    }
+  }
+  backend "gcs" {
+    bucket = "cv-applier-tfstate-PROJECT_ID"
+    prefix = "main"
+  }
+}
+
+provider "google" {
+  project = var.project_id
+  region  = "europe-west1"
+}
+
+resource "google_project_service" "apis" {
+  for_each = toset([
+    "run.googleapis.com",
+    "sqladmin.googleapis.com",
+    "aiplatform.googleapis.com",
+    "secretmanager.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "cloudscheduler.googleapis.com",
+  ])
+  service = each.value
+}
+
+resource "google_service_account" "runtime" {
+  account_id   = "cv-applier-run"
+  display_name = "CV Applier runtime"
+}
+
+resource "google_project_iam_member" "runtime_roles" {
+  for_each = toset([
+    "roles/cloudsql.client",
+    "roles/aiplatform.user",
+    "roles/secretmanager.secretAccessor",
+  ])
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}
+```
+
+`storage.googleapis.com` is deliberately missing from that list: bootstrap already
+turned it on for the state bucket, and `main` reuses it for the uploads bucket in phase
+12 without re-declaring it. An API is enabled by exactly one module - if both declared
+it, neither would fully own it, and a `terraform destroy` on one could disable an API the
+other still needs.
+
+The fourth role, `roles/storage.objectAdmin`, is granted in phase 12 on the uploads
+bucket resource itself rather than here, so it stays scoped to that bucket and not to
+the whole project.
+
+```
+cd ../main
+terraform init
+terraform apply
+```
+
+Set up Application Default Credentials so local code, including Terraform itself,
+authenticates as you, with no key file anywhere on disk. On Cloud Run the same code picks
+up the attached service account instead, which is why no service-account JSON key is
+ever downloaded in this project.
 
 ```
 gcloud auth application-default login
@@ -311,16 +448,29 @@ client = genai.Client(vertexai=True, project="PROJECT_ID", location="global")
 print(client.models.generate_content(model="gemini-3.1-flash-lite", contents="Reply with the word ready").text)
 ```
 
-**Done when** - that script prints text rather than a permission or billing error,
-`gcloud billing budgets list --billing-account=BILLING_ACCOUNT_ID` shows the $50 budget
-with three thresholds, and the project contains no Cloud SQL instance and no bucket.
+Then confirm what Terraform is actually tracking, rather than trusting memory of what ran:
 
-Two things that confuse everyone once: the trial credit pays for Vertex AI but **not**
+```
+gcloud storage ls gs://cv-applier-tfstate-PROJECT_ID/bootstrap/ gs://cv-applier-tfstate-PROJECT_ID/main/
+(cd infra/bootstrap && terraform state list)
+(cd infra/main && terraform state list)
+```
+
+**Done when** - the Vertex script prints text rather than a permission or billing error,
+both state files live in the bucket rather than on disk, `gcloud billing budgets list
+--billing-account=BILLING_ACCOUNT_ID` shows the $50 budget with three thresholds, and the
+project contains no Cloud SQL instance and no uploads bucket.
+
+Three things that confuse everyone once: the trial credit pays for Vertex AI but **not**
 for the Gemini API in Google AI Studio - same models, different products, different
-billing - and the console now calls Vertex AI the "Gemini Enterprise Agent Platform"
-while the docs and everyone else still say Vertex AI.
+billing; the console now calls Vertex AI the "Gemini Enterprise Agent Platform" while the
+docs and everyone else still say Vertex AI; and `google_billing_budget` fails with a bare
+403 under personal ADC credentials unless the provider block above carries
+`billing_project` and `user_project_override = true` - easy to forget, since none of the
+other resources in this phase need it.
 
-Effort: 1 hour.
+Effort: 1.5 hours, the extra half hour being the state-bucket migration the first time
+you see it.
 
 ---
 
@@ -552,65 +702,103 @@ Effort: 1 hour.
 
 ## Phase 12. Data plane
 
-**Goal** - the database, the bucket and the secrets that production will use, with the
-schema already migrated into place.
+**Goal** - the database, the bucket and the secret containers that production will use,
+declared in Terraform, with the schema already migrated into place. The database
+password and the secret values are the two things that never go in a `.tf` file.
 
-**Files** - extend `docs/cloud.md`.
+**Files** - extend `infra/main/main.tf`, extend `docs/cloud.md`.
 
 This is the phase where the billing clock starts. Everything before it was free. From the
 moment the Cloud SQL instance exists it bills about $10 a month whether or not anybody
 uses it, which is the only meaningful running cost in the whole project.
 
-```
-gcloud sql instances create cv-applier-db \
-  --database-version=POSTGRES_16 \
-  --tier=db-f1-micro \
-  --region=europe-west1 \
-  --storage-size=10GB \
-  --storage-type=SSD \
-  --availability-type=zonal
+```hcl
+resource "google_sql_database_instance" "db" {
+  name                = "cv-applier-db"
+  database_version    = "POSTGRES_16"
+  region              = "europe-west1"
+  deletion_protection = false
 
-gcloud sql databases create cv_applier --instance=cv-applier-db
+  settings {
+    tier              = "db-f1-micro"
+    availability_type = "ZONAL"
+    disk_size         = 10
+    disk_type         = "SSD"
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_sql_database" "app" {
+  name     = "cv_applier"
+  instance = google_sql_database_instance.db.name
+}
+```
+
+`deletion_protection = false` is a deliberate choice, not an oversight. The provider
+defaults this to `true`, which is the right instinct for a database with real users and
+the wrong one here, where phase 21's whole teardown checklist depends on
+`terraform destroy` being able to actually remove this instance before the credit runs
+out. The instance keeps its default address with an empty authorized-network list, so
+nothing on the internet can open a connection to it; access goes exclusively through the
+Cloud SQL Auth Proxy, which authenticates with IAM rather than an IP allowlist -
+`--no-assign-ip` would need a VPC network and a connector on the Cloud Run side to reach
+it, which buys nothing here.
+
+The database user and its password are not in this file, and never will be. Terraform
+state is a plaintext record of everything it manages, and a live database credential is
+exactly the thing not to hand it, so the user is created the same way as before:
+
+```
 gcloud sql users create cv --instance=cv-applier-db --password=DB_PASSWORD
 ```
 
-The instance has no authorized networks, so nothing on the internet can open a connection
-to it. Access goes exclusively through the Cloud SQL Auth Proxy, which authenticates with
-IAM rather than with an IP allowlist: locally you run the proxy yourself, and Cloud Run
-runs it for you as a unix socket at `/cloudsql/INSTANCE_CONNECTION_NAME`, which is why no
-VPC connector appears anywhere in this project. Going further and creating the instance
-with `--no-assign-ip` would require a VPC network and, on the Cloud Run side, a connector
-or direct VPC egress to reach it, which buys nothing here and is why the default address
-is left in place with an empty allowlist. `db-f1-micro` is shared-core with 0.6 GB of
-memory, enough for one person's job search and not for anything more.
+The bucket is named after the project so it is globally unique:
 
-The bucket is named after the project so it is globally unique, and uses uniform
-bucket-level access, which means one IAM policy for the whole bucket instead of per-object
-ACLs. It is not public; the app reads and writes it as the service account.
+```hcl
+resource "google_storage_bucket" "uploads" {
+  name                        = "cv-applier-uploads-${var.project_id}"
+  location                    = "europe-west1"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+}
 
-```
-gcloud storage buckets create gs://cv-applier-uploads-PROJECT_ID \
-  --location=europe-west1 \
-  --uniform-bucket-level-access
-
-gcloud storage buckets add-iam-policy-binding gs://cv-applier-uploads-PROJECT_ID \
-  --member="serviceAccount:cv-applier-run@PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/storage.objectAdmin"
+resource "google_storage_bucket_iam_member" "uploads_admin" {
+  bucket = google_storage_bucket.uploads.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.runtime.email}"
+}
 ```
 
-That is the fourth role from phase 4, granted here because it is scoped to the bucket
-rather than to the project.
+That IAM binding is the fourth role mentioned in phase 4, granted here because it is
+scoped to this one bucket rather than to the whole project.
 
-Two secrets go into Secret Manager. Cloud Run injects them as environment variables in
-phase 13, so the application keeps reading plain `os.environ` and never imports a Secret
-Manager client.
+Two secret *containers* go into Secret Manager. Terraform creates the empty container;
+the value inside it is set by hand, for the same reason the database password is:
+
+```hcl
+resource "google_secret_manager_secret" "jwt" {
+  secret_id = "jwt-secret"
+  replication { auto {} }
+}
+
+resource "google_secret_manager_secret" "google_client_secret" {
+  secret_id = "google-client-secret"
+  replication { auto {} }
+}
+```
 
 ```
-printf '%s' "$JWT_SECRET" | gcloud secrets create jwt-secret --data-file=-
-printf '%s' "$GOOGLE_CLIENT_SECRET" | gcloud secrets create google-client-secret --data-file=-
+terraform apply
+
+printf '%s' "$JWT_SECRET" | gcloud secrets versions add jwt-secret --data-file=-
+printf '%s' "$GOOGLE_CLIENT_SECRET" | gcloud secrets versions add google-client-secret --data-file=-
 ```
 
-Finally, run the migration against Cloud SQL through the proxy. In one terminal:
+Finally, run the migration against Cloud SQL through the proxy, exactly as before -
+Terraform provisions an empty database and stops there. It does not know about Alembic
+and does not run migrations; schema is data-shaped, not infrastructure-shaped, and stays
+with the application's own tooling. In one terminal:
 
 ```
 gcloud sql instances describe cv-applier-db --format='value(connectionName)'
@@ -627,38 +815,73 @@ DATABASE_URL="postgresql+psycopg://cv:DB_PASSWORD@127.0.0.1:5433/cv_applier" ale
 **Verify** -
 
 ```
+terraform -chdir=infra/main state list | grep -E 'sql|bucket|secret'
 gcloud sql instances list
 gcloud storage ls gs://cv-applier-uploads-PROJECT_ID
 gcloud secrets list
 psql "postgresql://cv:DB_PASSWORD@127.0.0.1:5433/cv_applier" -c "\dt"
 ```
 
-**Done when** - the instance is `RUNNABLE`, both secrets are listed, and `\dt` through the
-proxy shows the same tables the compose stack has.
+**Done when** - Terraform's own state list shows the instance, both buckets and both
+secret containers, the instance is `RUNNABLE`, both secrets have a version, and `\dt`
+through the proxy shows the same tables the compose stack has.
 
 If you stop work for a while, `gcloud sql instances patch cv-applier-db --activation-policy=NEVER`
 stops the instance and with it the compute charge. Storage is still billed on a stopped
-instance, so the bill drops to roughly $1.70 a month rather than to zero.
+instance, so the bill drops to roughly $1.70 a month rather than to zero. This is an
+operational toggle, not a change to anything Terraform should track, so it stays a
+`gcloud` command: flipping it back on is one command, not a plan and an apply.
 
-Effort: 2 hours.
+Effort: 2.5 hours.
 
 ---
 
 ## Phase 13. First deploy
 
-**Goal** - the real application on a public URL, signing you in with Google.
+**Goal** - the real application on a public URL, signing you in with Google, with the
+Cloud Run service itself declared in Terraform and its running image left to Cloud Build.
 
-**Files** - extend `docs/cloud.md`.
+**Files** - extend `infra/main/main.tf`, extend `infra/main/variables.tf`, extend
+`docs/cloud.md`.
 
-Create the image repository and build into it. Tag with the commit sha, never `latest`;
-phase 15 explains why.
+The repository, in Terraform, with its cleanup policy attached directly to the resource
+rather than as a separate command:
+
+```hcl
+resource "google_artifact_registry_repository" "backend" {
+  location               = "europe-west1"
+  repository_id          = "cv-applier"
+  format                 = "DOCKER"
+  cleanup_policy_dry_run = false
+
+  cleanup_policies {
+    id     = "delete-old"
+    action = "DELETE"
+    condition { tag_state = "ANY" }
+  }
+
+  cleanup_policies {
+    id     = "keep-recent"
+    action = "KEEP"
+    most_recent_versions { keep_count = 2 }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+```
+
+`keep-recent` overrides `delete-old` for whichever two versions are newest, which is what
+keeps this inside Artifact Registry's free 0.5 GB: a slim image is around 200 MB, so a
+handful of untracked builds would fill it.
 
 ```
-gcloud artifacts repositories create cv-applier \
-  --repository-format=docker \
-  --location=europe-west1 \
-  --description="CV Applier images"
+terraform apply
+```
 
+Build and push. An image build is not infrastructure, so it stays a plain Docker command
+run by hand, tagged with the commit sha, never `latest`; phase 15 explains why.
+
+```
 gcloud auth configure-docker europe-west1-docker.pkg.dev
 
 TAG=$(git rev-parse --short HEAD)
@@ -666,28 +889,132 @@ docker build -t europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend:$TAG b
 docker push europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend:$TAG
 ```
 
-Deploy. The service runs as the phase 4 service account, mounts the Cloud SQL socket,
-takes its configuration as environment variables and its two secrets from Secret Manager.
+Now the service, in Terraform, pointed at the image you just pushed:
+
+```hcl
+resource "google_cloud_run_v2_service" "app" {
+  name     = "cv-applier"
+  location = "europe-west1"
+  ingress  = "INGRESS_TRAFFIC_ALL"
+
+  template {
+    service_account = google_service_account.runtime.email
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 3
+    }
+    containers {
+      image = "europe-west1-docker.pkg.dev/${var.project_id}/cv-applier/backend:TAG"
+
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.project_id
+      }
+      env {
+        name  = "GCS_BUCKET"
+        value = google_storage_bucket.uploads.name
+      }
+      env {
+        name  = "VERTEX_LOCATION"
+        value = "global"
+      }
+      env {
+        name  = "VERTEX_MODEL"
+        value = "gemini-3.1-flash-lite"
+      }
+      env {
+        name  = "COOKIE_SECURE"
+        value = "true"
+      }
+      env {
+        name  = "GOOGLE_CLIENT_ID"
+        value = var.google_client_id
+      }
+      env {
+        name  = "DATABASE_URL"
+        value = "postgresql+psycopg://cv:${var.db_password}@/cv_applier?host=/cloudsql/${google_sql_database_instance.db.connection_name}"
+      }
+      env {
+        name = "JWT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.jwt.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "GOOGLE_CLIENT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.google_client_secret.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
+    }
+
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.db.connection_name]
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "public" {
+  name     = google_cloud_run_v2_service.app.name
+  location = google_cloud_run_v2_service.app.location
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+```
+
+`db_password` and `google_client_id` are declared in `infra/main/variables.tf`, supplied
+the same way as `project_id`; `db_password` is marked `sensitive = true`, which hides it
+from `plan` and `apply` output but not from state - state was always going to hold this
+connection string, so nothing new is exposed by Terraform managing it, the same trade the
+project already accepted by putting the password in `DATABASE_URL` rather than in Secret
+Manager in the first place. If that stops feeling acceptable, move the whole URL into a
+third secret, referenced with the same `secret_key_ref` pattern already used for
+`JWT_SECRET` and `GOOGLE_CLIENT_SECRET` above.
+
+`google_cloud_run_v2_service_iam_member` with `member = "allUsers"` is the Terraform
+equivalent of `--allow-unauthenticated`: it lets the public reach the service, and the
+application still does its own session-cookie auth, with Google sign-in the thing that
+actually gates it.
+
+`lifecycle.ignore_changes` on the image field is the one line in this whole project doing
+the most quiet work. Phase 15's Cloud Build pipeline redeploys a new image to this same
+service on every push, straight past Terraform. Without that line, the next unrelated
+`apply` - raising `max_instance_count`, say - would read the old tag still sitting in
+this file and silently roll the live service back to it. Worth knowing before it
+surprises you: the provider sends the *entire* service definition on every update rather
+than a targeted patch, so `ignore_changes` only stops Terraform from *planning* a change
+to the image - it does not protect you from *applying* a plan that was saved before the
+last deploy happened. The safe habit is to always run `plan` and `apply` back to back
+against fresh state, never to apply an old saved plan file.
 
 ```
-gcloud run deploy cv-applier \
-  --image=europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend:$TAG \
-  --region=europe-west1 \
-  --service-account=cv-applier-run@PROJECT_ID.iam.gserviceaccount.com \
-  --add-cloudsql-instances=PROJECT_ID:europe-west1:cv-applier-db \
-  --min-instances=0 --max-instances=3 \
-  --allow-unauthenticated \
-  --set-env-vars="DATABASE_URL=postgresql+psycopg://cv:DB_PASSWORD@/cv_applier?host=/cloudsql/PROJECT_ID:europe-west1:cv-applier-db,GOOGLE_CLOUD_PROJECT=PROJECT_ID,GCS_BUCKET=cv-applier-uploads-PROJECT_ID,VERTEX_LOCATION=global,VERTEX_MODEL=gemini-3.1-flash-lite,COOKIE_SECURE=true,GOOGLE_CLIENT_ID=YOUR_CLIENT_ID" \
-  --set-secrets="JWT_SECRET=jwt-secret:latest,GOOGLE_CLIENT_SECRET=google-client-secret:latest"
+terraform apply
 ```
 
-`--allow-unauthenticated` lets the public reach the service; the application still does
-its own session-cookie auth, and Google sign-in is what actually gates it. The database
-password rides in `DATABASE_URL` rather than in Secret Manager; if that stops feeling
-acceptable, move the whole URL into a secret the same way as the other two.
-
-The service URL is only known after the first deploy, and two settings depend on it, so
-read it back and update:
+`GOOGLE_REDIRECT_URI` and `FRONTEND_ORIGIN` are conspicuously absent from the `env`
+blocks above, for a genuine reason rather than an oversight: Cloud Run only assigns the
+service's URL once this resource has been created, so Terraform cannot reference a value
+that does not exist yet on the same apply that creates it. Read it back and set those two
+imperatively, the one ordering problem in this phase that patching by hand is the
+ordinary answer to, not a compromise:
 
 ```
 SERVICE_URL=$(gcloud run services describe cv-applier --region=europe-west1 --format='value(status.url)')
@@ -720,18 +1047,22 @@ cause:
 browser and complete a real Google sign-in. Logs are at
 `gcloud run services logs read cv-applier --region=europe-west1 --limit=50`.
 
-**Done when** - sign-in against the live URL ends on the app with a session cookie, and
-`/api/auth/me` returns your email over HTTPS.
+**Done when** - sign-in against the live URL ends on the app with a session cookie,
+`/api/auth/me` returns your email over HTTPS, and `terraform -chdir=infra/main plan`
+reports no changes at all - not even to the image field, which `ignore_changes` hides
+from the diff entirely.
 
-Effort: 2 hours, most of it the redirect URI and the cookie flags.
+Effort: 2.5 hours, most of it the redirect URI, the cookie flags, and watching
+`ignore_changes` actually do its job for the first time.
 
 ---
 
 ## Phase 14. Scheduled refresh
 
-**Goal** - job sources refreshed nightly without anyone clicking anything.
+**Goal** - job sources refreshed nightly without anyone clicking anything, the job and
+its trigger both declared in Terraform.
 
-**Files** - `backend/app/refresh.py`, extend `docs/cloud.md`.
+**Files** - `backend/app/refresh.py`, extend `infra/main/main.tf`, extend `docs/cloud.md`.
 
 `refresh.py` is a module entrypoint that calls the same source-registry code the
 `POST /api/jobs/refresh` route calls, then exits. It runs as a Cloud Run job sharing the
@@ -743,40 +1074,106 @@ duration; the work is privileged and belongs to nobody's session; and a public e
 that triggers expensive work would need its own authentication on top of the user session
 that it does not have.
 
-```
-gcloud run jobs create cv-applier-refresh \
-  --image=europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend:$TAG \
-  --region=europe-west1 \
-  --service-account=cv-applier-run@PROJECT_ID.iam.gserviceaccount.com \
-  --set-cloudsql-instances=PROJECT_ID:europe-west1:cv-applier-db \
-  --command=python --args=-m,app.refresh \
-  --task-timeout=30m --max-retries=1 \
-  --set-env-vars="DATABASE_URL=postgresql+psycopg://cv:DB_PASSWORD@/cv_applier?host=/cloudsql/PROJECT_ID:europe-west1:cv-applier-db,GOOGLE_CLOUD_PROJECT=PROJECT_ID,GCS_BUCKET=cv-applier-uploads-PROJECT_ID,VERTEX_LOCATION=global,VERTEX_MODEL=gemini-3.1-flash-lite"
+```hcl
+resource "google_cloud_run_v2_job" "refresh" {
+  name     = "cv-applier-refresh"
+  location = "europe-west1"
+
+  template {
+    template {
+      service_account = google_service_account.runtime.email
+      max_retries     = 1
+      timeout         = "1800s"
+
+      containers {
+        image   = "europe-west1-docker.pkg.dev/${var.project_id}/cv-applier/backend:TAG"
+        command = ["python"]
+        args    = ["-m", "app.refresh"]
+
+        env {
+          name  = "DATABASE_URL"
+          value = "postgresql+psycopg://cv:${var.db_password}@/cv_applier?host=/cloudsql/${google_sql_database_instance.db.connection_name}"
+        }
+        env {
+          name  = "GOOGLE_CLOUD_PROJECT"
+          value = var.project_id
+        }
+        env {
+          name  = "GCS_BUCKET"
+          value = google_storage_bucket.uploads.name
+        }
+        env {
+          name  = "VERTEX_LOCATION"
+          value = "global"
+        }
+        env {
+          name  = "VERTEX_MODEL"
+          value = "gemini-3.1-flash-lite"
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [google_sql_database_instance.db.connection_name]
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].template[0].containers[0].image]
+  }
+}
 ```
 
-Run it once by hand before scheduling it:
+The `ignore_changes` path has an extra `template[0]` compared to the service in phase 13:
+a Cloud Run job nests an execution template inside the job template, where a service has
+only one level. Copying the service's path verbatim compiles and silently does nothing,
+because there is no `template[0].containers[0]` on a job to match against - it is worth
+checking `terraform plan` actually reports no image diff after a manual deploy, rather
+than assuming the line is working.
+
+The scheduler needs permission to invoke this one job, on the job itself rather than on
+the project:
+
+```hcl
+resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
+  name     = google_cloud_run_v2_job.refresh.name
+  location = google_cloud_run_v2_job.refresh.location
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_cloud_scheduler_job" "nightly" {
+  name      = "cv-applier-nightly"
+  region    = "europe-west1"
+  schedule  = "0 5 * * *"
+  time_zone = "Europe/Bucharest"
+
+  http_target {
+    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/europe-west1/jobs/cv-applier-refresh:run"
+    http_method = "POST"
+    oauth_token {
+      service_account_email = google_service_account.runtime.email
+    }
+  }
+}
+```
+
+```
+terraform apply
+```
+
+Run it once by hand before trusting the schedule:
 
 ```
 gcloud run jobs execute cv-applier-refresh --region=europe-west1 --wait
-```
-
-The scheduler calls the Cloud Run Admin API as the same runtime service account, which
-therefore needs permission to invoke this one job. That binding is on the job, not on the
-project.
-
-```
-gcloud run jobs add-iam-policy-binding cv-applier-refresh \
-  --region=europe-west1 \
-  --member="serviceAccount:cv-applier-run@PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/run.invoker"
-
-gcloud scheduler jobs create http cv-applier-nightly \
-  --location=europe-west1 \
-  --schedule="0 5 * * *" \
-  --time-zone="Europe/Bucharest" \
-  --uri="https://run.googleapis.com/v2/projects/PROJECT_ID/locations/europe-west1/jobs/cv-applier-refresh:run" \
-  --http-method=POST \
-  --oauth-service-account-email="cv-applier-run@PROJECT_ID.iam.gserviceaccount.com"
 ```
 
 **Verify** - `gcloud scheduler jobs run cv-applier-nightly --location=europe-west1`, then
@@ -785,15 +1182,17 @@ gcloud scheduler jobs create http cv-applier-nightly \
 **Done when** - the forced run shows a succeeded execution, and the next morning the job
 count is higher than it was the night before.
 
-Effort: 1 hour.
+Effort: 1.5 hours.
 
 ---
 
 ## Phase 15. Deploy on push
 
-**Goal** - a push to `main` ends up serving traffic without a laptop in the loop.
+**Goal** - a push to `main` ends up serving traffic without a laptop in the loop, with
+the trigger declared in Terraform on top of the one manual step Terraform cannot do.
 
-**Files** - `cloudbuild.yaml`, `cleanup-policy.json`, extend `docs/cloud.md`.
+**Files** - `cloudbuild.yaml`, extend `infra/main/main.tf`, extend
+`infra/main/variables.tf`, extend `docs/cloud.md`.
 
 ```yaml
 steps:
@@ -809,75 +1208,103 @@ steps:
       - cv-applier
       - --image=europe-west1-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA
       - --region=europe-west1
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - update
+      - cv-applier-refresh
+      - --image=europe-west1-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA
+      - --region=europe-west1
 options:
   logging: CLOUD_LOGGING_ONLY
 ```
 
-The trigger connects the repository to that file. Connecting the GitHub repository is a
-one-time console step under Cloud Build, Repositories.
+The second `gcloud run jobs update` step exists because the phase 14 job otherwise never
+sees a new image after the day it was created: only the service gets redeployed by the
+first three steps, and a refresh job silently running last month's code is a worse bug
+than a slow one, because nothing about it looks broken.
+
+Connecting the GitHub repository is the other step in this project that stays outside
+Terraform, alongside creating the project itself back in phase 4, and it is a genuine
+exception rather than a shortcut: it means installing Google's Cloud Build GitHub App on
+your repository, which is GitHub's own one-time authorization flow, not Google's, and has
+no `gcloud` or Terraform equivalent. Do this once, under Cloud Build, Repositories,
+Connect Repository, GitHub (2nd generation), and note the connection name it creates.
+
+Terraform reads that connection back as a data source - it was never a Terraform
+resource, so there is nothing to import - and builds the repository reference and the
+trigger on top of it:
+
+```hcl
+data "google_cloudbuildv2_connection" "github" {
+  location = "europe-west1"
+  name     = "cv-applier-github"
+}
+
+resource "google_cloudbuildv2_repository" "repo" {
+  location          = "europe-west1"
+  name              = "cv-applier"
+  parent_connection = data.google_cloudbuildv2_connection.github.name
+  remote_uri        = "https://github.com/GITHUB_OWNER/GITHUB_REPO.git"
+}
+
+resource "google_cloudbuild_trigger" "on_push" {
+  location = "europe-west1"
+
+  repository_event_config {
+    repository = google_cloudbuildv2_repository.repo.id
+    push { branch = "^main$" }
+  }
+
+  filename        = "cloudbuild.yaml"
+  service_account = "projects/${var.project_id}/serviceAccounts/${var.project_number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "build_deployer" {
+  project = var.project_id
+  role    = "roles/run.developer"
+  member  = "serviceAccount:${var.project_number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_service_account_iam_member" "build_impersonates_runtime" {
+  service_account_id = google_service_account.runtime.name
+  role                = "roles/iam.serviceAccountUser"
+  member              = "serviceAccount:${var.project_number}-compute@developer.gserviceaccount.com"
+}
+```
+
+`service_account` on the trigger has to be the full `projects/.../serviceAccounts/...`
+path shown above. Leaving it unset does not fail loudly - it silently falls back to the
+default Cloud Build service account, which lacks the roles above, and the trigger then
+fails every run with a plain "invalid argument" that never says which account it tried
+or why. `project_number` is `gcloud projects describe PROJECT_ID --format='value(projectNumber)'`,
+added to `infra/main/variables.tf` alongside the others.
 
 ```
-gcloud builds triggers create github \
-  --name=cv-applier-main \
-  --region=europe-west1 \
-  --repo-owner=GITHUB_OWNER \
-  --repo-name=GITHUB_REPO \
-  --branch-pattern="^main$" \
-  --build-config=cloudbuild.yaml
-```
-
-The build's own service account needs to deploy and to act as the runtime account:
-
-```
-gcloud projects add-iam-policy-binding PROJECT_ID \
-  --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-  --role="roles/run.developer"
-
-gcloud iam service-accounts add-iam-policy-binding \
-  cv-applier-run@PROJECT_ID.iam.gserviceaccount.com \
-  --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-  --role="roles/iam.serviceAccountUser"
+terraform apply
 ```
 
 Images are tagged `$SHORT_SHA` rather than `latest` because `latest` destroys the link
 between a running revision and the code inside it. Two deploys of `:latest` look identical
 in the console while running different code, a rollback has no earlier tag to go back to,
 and the tag silently moves under a revision that has already started. With a sha tag,
-every Cloud Run revision names the commit it came from.
-
-Artifact Registry is free only up to 0.5 GB and this image is roughly 200 MB, so a handful
-of builds fills it. Keep the recent few and let the rest expire:
-
-```json
-[
-  {
-    "name": "keep-recent",
-    "action": {"type": "Keep"},
-    "mostRecentVersions": {"keepCount": 2}
-  },
-  {
-    "name": "delete-old",
-    "action": {"type": "Delete"},
-    "condition": {"olderThan": "30d"}
-  }
-]
-```
-
-```
-gcloud artifacts repositories set-cleanup-policies cv-applier \
-  --location=europe-west1 \
-  --policy=cleanup-policy.json
-```
+every Cloud Run revision names the commit it came from. The cleanup policy that keeps
+Artifact Registry inside its free 0.5 GB is already on the repository resource from
+phase 13, so there is nothing further to configure here.
 
 **Verify** - push a trivial change to `main`, watch
 `gcloud builds list --region=europe-west1 --limit=5`, then confirm the new revision:
 `gcloud run revisions list --service=cv-applier --region=europe-west1`
 
-**Done when** - the push produced a green build and a new revision whose image tag is that
-commit's sha, and `gcloud artifacts docker images list europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend`
-holds no more than two images, which is what keeps the repository inside the free 0.5 GB.
+**Done when** - the push produced a green build, a new revision whose image tag is that
+commit's sha, a refresh job pointed at the same tag, and
+`gcloud artifacts docker images list europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend`
+holds no more than two images.
 
-Effort: 1.5 hours.
+Effort: 2 hours, longer than it looks because the GitHub connection step is fiddly the
+first time.
 
 ---
 
@@ -1037,6 +1464,7 @@ phase 4 budget is still attached with `gcloud billing budgets list --billing-acc
 | Cloud Run | $0 | Free tier covers 2M requests, 180k vCPU-seconds and 360k GiB-seconds a month. Scale to zero means an idle app costs nothing. |
 | Cloud SQL `db-f1-micro` + 10 GB SSD | about $10 a month | $0.0105 an hour for the instance plus about $1.70 a month for storage. No free tier. This is the only meaningful running cost. |
 | Cloud Storage | under $0.10 a month | The 5 GB free tier is US-only, so `europe-west1` bills from the first byte at about $0.02 per GB-month. |
+| Terraform state bucket | under $0.01 a month | A handful of small JSON files, billed the same as the uploads bucket. |
 | Vertex AI, `gemini-3.1-flash-lite` | about $0.005 per cover letter | $0.25 per million input tokens, $1.50 per million output tokens. |
 | Artifact Registry | $0 | 0.5 GB free. A slim image is around 200 MB, so keep at most two tags. |
 | Secret Manager | $0 | 6 active secret versions and 10,000 access operations free per month. |
@@ -1049,26 +1477,38 @@ majority of the $300 unspent.
 
 ### Teardown checklist
 
-Every chargeable thing phases 4 to 15 created, in dependency order. Deleting the project
-removes all of it at once, but the itemised list is what you need when you want to keep
-the project and stop the bill.
+Almost everything phases 4 to 15 created is a Terraform resource now, so two
+`terraform destroy` runs undo almost all of it - `main` first, then `bootstrap`, the
+reverse of the order they were created in, because `main`'s state lives in the bucket
+`bootstrap` manages, and destroying `bootstrap` first would pull that bucket out from
+under `main` mid-command.
 
-| Resource | Command |
+```
+cd infra/main && terraform destroy
+cd ../bootstrap && terraform destroy
+```
+
+`deletion_protection = false` on the Cloud SQL instance, set back in phase 12, is what
+lets the first command actually succeed rather than erroring on the database. The SQL
+user and every secret version created by hand are destroyed as children of the
+resources that own them - no separate command needed - and destroying the Artifact
+Registry repository removes every image inside it the same way.
+
+Three things `terraform destroy` cannot touch, because Terraform never created them:
+
+| Resource | What to do |
 | --- | --- |
-| Scheduler job `cv-applier-nightly` | `gcloud scheduler jobs delete cv-applier-nightly --location=europe-west1` |
-| Build trigger `cv-applier-main` | `gcloud builds triggers delete cv-applier-main --region=europe-west1` |
-| Cloud Run job `cv-applier-refresh` | `gcloud run jobs delete cv-applier-refresh --region=europe-west1` |
-| Cloud Run service `cv-applier` | `gcloud run services delete cv-applier --region=europe-west1` |
-| Artifact Registry repo `cv-applier` | `gcloud artifacts repositories delete cv-applier --location=europe-west1` |
-| Cloud SQL instance `cv-applier-db` | `gcloud sql instances delete cv-applier-db` |
-| Bucket `cv-applier-uploads-PROJECT_ID` | `gcloud storage rm --recursive gs://cv-applier-uploads-PROJECT_ID` |
-| Secrets | `gcloud secrets delete jwt-secret` and `gcloud secrets delete google-client-secret` |
-| Service account `cv-applier-run` | `gcloud iam service-accounts delete cv-applier-run@PROJECT_ID.iam.gserviceaccount.com` |
-| Budget | `gcloud billing budgets delete BUDGET_ID --billing-account=BILLING_ACCOUNT_ID` |
-| Everything, including the project | `gcloud projects delete PROJECT_ID` |
+| The GitHub App installation from phase 15 | Uninstall it from your GitHub account's Applications settings - the connection was always a data source, never a Terraform resource |
+| The project and the billing link | `gcloud projects delete PROJECT_ID`, phase 4's one manual step undone the same way it was made |
+| Nothing else | The budget lives under the billing account and is destroyed along with everything else in `bootstrap` |
 
-Of these, only Cloud SQL and Cloud Storage cost anything while idle. If you want the data
-kept and the bill mostly gone, stop the instance rather than deleting it, as in phase 12.
+Deleting the project is the bigger hammer: it removes everything at once, Terraform-managed
+or not, right if you are done experimenting, wrong if you expect to come back and
+`terraform apply` again on the same project later.
+
+Of everything above, only Cloud SQL and Cloud Storage cost anything while idle. If you
+want the data kept and the bill mostly gone without destroying anything, stop the
+instance rather than tearing it down, as in phase 12.
 
 When the trial ends the billing account closes rather than charging a card, so the
 failure mode of forgetting all this is that the app stops, not that you get a bill.
@@ -1092,7 +1532,8 @@ exposes, and the constraints the code cannot show.
 - Phase 1: `AGENTS.md` at the root - stack, how to run both halves, index into `docs/`.
 - Phase 3: `docs/auth.md` - the OAuth flow, why no Google tokens are stored, the verified
   email rule for account linking, and how to add a second provider.
-- Phases 4 and 5: `docs/cloud.md` - the GCP project layout, what runs where, the local
+- Phases 4 and 5: `docs/cloud.md` - the GCP project layout, the `infra/bootstrap` and
+  `infra/main` Terraform modules and why they are split, what runs where, the local
   compose stack and how it mirrors production, the credentials model.
 - Phase 6: `docs/profile.md` - CV parsing path, the extraction contract, where the
   uploaded file is stored.
@@ -1112,7 +1553,7 @@ exposes, and the constraints the code cannot show.
 Per the feature workflow rule, the lead fixes the contracts first, then splits. Four
 points in this plan split cleanly:
 
-- Phase 4 is console and CLI work that touches no application code, so it can run
+- Phase 4 is Terraform and CLI work that touches no application code, so it can run
   alongside phase 5 once the environment variable names are fixed. Contract to fix first:
   the `.env` block in the prerequisites.
 - Phases 7 and 8 are one workstream (job sources) that is independent of phases 3 and 6

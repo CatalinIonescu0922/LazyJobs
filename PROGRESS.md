@@ -84,6 +84,11 @@ against what actually happened.
   Compose before creating a chargeable resource, so the credit is spent on a system that
   already works; Alembic in phase 5 rather than at deploy time, because `create_all` races
   across Cloud Run instances. No code changed and nothing was deployed.
+- 2026-09-16: Terraform added to phases 4, 12 to 15, in two root modules,
+  `infra/bootstrap` and `infra/main`, replacing one-off `gcloud` resource creation. The
+  project itself, the database password, all secret values, and the GitHub App
+  authorization for Cloud Build stay outside Terraform, each for a different reason
+  recorded in LEARNING.md entries 21 to 26. No code changed.
 
 ---
 

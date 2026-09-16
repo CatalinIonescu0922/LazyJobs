@@ -29,6 +29,9 @@ and the concepts behind them.
   database on Cloud SQL, uploaded CVs in Cloud Storage, the LLM on Vertex AI, and a
   nightly source refresh on Cloud Scheduler. Everything is proved locally under Docker
   Compose before anything chargeable is created.
+- Every one of those resources declared in Terraform and created through `terraform
+  plan` and `apply`, not clicked together in the console or typed as one-off `gcloud`
+  commands, so the whole cloud side can be rebuilt from a fresh checkout.
 
 ### Explicitly out of scope for v1
 
@@ -161,6 +164,66 @@ calls it Vertex AI throughout.
 | Cloud Scheduler, job `cv-applier-nightly` | Cron `0 5 * * *`, Europe/Bucharest, triggering the `cv-applier-refresh` Cloud Run job | A source refresh walks sitemaps at one request per second for minutes. As an HTTP endpoint it would fight the request timeout and be callable by anyone; as a job it has its own timeout and no public surface |
 | Cloud Logging | Structured JSON on stdout, parsed into fields | The first 50 GiB a month is free, so there is no reason to ship logs anywhere else |
 
+### Infrastructure as code
+
+Every resource in the table above is defined in Terraform. A config file states the
+desired end state, `terraform plan` shows exactly what would change before anything does,
+and `terraform apply` is the only thing allowed to touch real infrastructure. The point
+is not elegance: it is that the whole cloud side can be rebuilt from a fresh checkout,
+that a change is a reviewable diff before it runs, and that nothing exists which is not
+written down somewhere - the opposite of a resource someone clicked into being at 11pm
+and forgot about.
+
+Two Terraform root modules, `infra/bootstrap/` and `infra/main/`, not one:
+
+- `infra/bootstrap/` runs first, with local state, because the thing it creates is the
+  bucket that will later hold everyone's state, including its own. It enables the
+  handful of APIs bootstrapping itself needs, creates the
+  `cv-applier-tfstate-PROJECT_ID` bucket with versioning and uniform bucket-level access,
+  and creates the phase 4 budget. Once the bucket exists, bootstrap points its own
+  `backend` block at it and `terraform init -migrate-state` moves its state off the
+  laptop and into the bucket it just made, closing the loop.
+- `infra/main/` uses that bucket from its very first `init`, under a different prefix,
+  and never has permission to create or move its own backend - the state bucket is not
+  something the resources it manages are allowed to touch. It holds everything else: the
+  remaining APIs, the runtime service account and its roles, Cloud SQL, the uploads
+  bucket, Artifact Registry, the Secret Manager containers, Cloud Run and its job, and
+  the Cloud Scheduler trigger.
+
+One thing still happens by hand, deliberately: creating the project itself and linking
+billing. Terraform's provider calls Google's APIs using a quota project attached to your
+credentials - the same quota project `gcloud auth application-default
+set-quota-project` sets up in phase 4 - and before a project exists there is nothing to
+attach it to. So the project and the billing link are two `gcloud` commands, run once,
+before either module exists. Everything after that is Terraform.
+
+Two rules keep the two modules from tangling. First, an API is enabled by exactly one
+module: `storage.googleapis.com` is turned on in bootstrap because bootstrap needs it
+for the state bucket, and `main` uses that same already-enabled API for the uploads
+bucket without re-declaring it, so the two never fight over who owns it. Second, and
+more important: a secret's *container* is a Terraform resource, a secret's *value* never
+is. Terraform state is a plaintext record of everything it manages, so `main` creates the
+empty `jwt-secret` and `google-client-secret` containers, and their actual values, along
+with the Cloud SQL user's password, are set by hand with `gcloud secrets versions add`
+and `gcloud sql users create`, exactly as before Terraform existed in this plan. Nothing
+Terraform tracks is a credential.
+
+One resource needs a deliberate carve-out: the Cloud Run service's container image.
+Terraform creates the service, and phase 15's Cloud Build pipeline redeploys a new image
+to it on every push, bypassing Terraform entirely. Left alone, the next unrelated
+`terraform apply` - bumping `max-instances`, say - would silently roll the live image
+back to whatever tag is still sitting in the `.tf` file, undoing every deploy since.
+`lifecycle { ignore_changes = [template[0].containers[0].image] }` on that resource
+tells Terraform the image field belongs to someone else. This is the standard shape
+wherever a deploy pipeline and an infrastructure config touch the same resource:
+Terraform owns the shell, the pipeline owns what is running inside it.
+
+Not everything reaches Terraform. Connecting Cloud Build to GitHub needs GitHub's own
+one-time authorization - installing a GitHub App - which has no `gcloud` or Terraform
+equivalent because it is GitHub's flow, not Google's. That one click happens in the
+console in phase 15; the repository reference and the trigger built on top of it are
+ordinary Terraform resources.
+
 ### The local stack, and how faithfully it mirrors production
 
 `docker-compose.yml` runs three containers: the app image from `backend/Dockerfile`, a
@@ -241,6 +304,7 @@ the same values.
 | Cloud Run | $0 | Free tier covers 2M requests, 180k vCPU-seconds and 360k GiB-seconds a month. Scale to zero means an idle app costs nothing. |
 | Cloud SQL `db-f1-micro` + 10 GB SSD | about $10 a month | $0.0105 an hour for the instance plus about $1.70 a month for storage. No free tier. This is the only meaningful running cost. |
 | Cloud Storage | under $0.10 a month | The 5 GB free tier is US-only, so `europe-west1` bills from the first byte at about $0.02 per GB-month. |
+| Terraform state bucket | under $0.01 a month | A handful of small JSON files in `europe-west1`, billed the same as the uploads bucket. |
 | Vertex AI, `gemini-3.1-flash-lite` | about $0.005 per cover letter | $0.25 per million input tokens, $1.50 per million output tokens. |
 | Artifact Registry | $0 | 0.5 GB free. A slim image is around 200 MB, so keep at most two tags. |
 | Secret Manager | $0 | 6 active secret versions and 10,000 access operations free per month. |
@@ -560,6 +624,9 @@ frontend/
   src/pages/  src/components/  src/api.ts
 docker-compose.yml              app, postgres 16, fake-gcs-server
 cloudbuild.yaml                 build, push and deploy on a push to main
+infra/
+  bootstrap/main.tf              state bucket, budget, bootstrap APIs; local state, migrated once created
+  main/main.tf                   everything else: SQL, buckets, secrets containers, Cloud Run, scheduler
 ```
 
 ---
@@ -576,9 +643,10 @@ decision was made.
 1. Application skeleton (done).
 2. Data model for identity (done).
 3. Google sign-in (done).
-4. GCP project and guardrails: the budget alert first, then the APIs, Application Default
-   Credentials and the runtime service account. Nothing chargeable is created, and a
-   single Vertex AI call costing a fraction of a cent proves it works.
+4. GCP project and guardrails: the project and billing link by hand, then Terraform for
+   the rest - `infra/bootstrap/` for the state bucket and the budget alert, `infra/main/`
+   for the remaining APIs and the runtime service account. Nothing chargeable is
+   created, and a single Vertex AI call costing a fraction of a cent proves it works.
 5. Local cloud-parity stack: `backend/Dockerfile`, `docker-compose.yml` with Postgres 16
    and `fake-gcs-server`, off SQLite, Alembic for the schema. Phases 1 to 3 must still pass.
 6. CV upload and profile: the file goes to Cloud Storage, the extraction call to Vertex AI.
@@ -590,13 +658,16 @@ decision was made.
 
 **Part 2 - Running on GCP**
 
-12. Data plane: the Cloud SQL instance, the bucket, secrets into Secret Manager, and the
-    Alembic migration run against Cloud SQL. The billing clock starts here.
-13. First deploy: Artifact Registry, build and push, the Cloud Run service with its
-    service account, Cloud SQL connection and secrets attached, the Cloud Run URL added as
-    a second redirect URI, `COOKIE_SECURE=true`, and a real Google sign-in on the live URL.
-14. Scheduled refresh: the `cv-applier-refresh` job and the `cv-applier-nightly` trigger.
-15. Deploy on push: a Cloud Build trigger on main.
+12. Data plane: Terraform creates the Cloud SQL instance, the uploads bucket and the
+    Secret Manager containers; the database password and the secret values are set by
+    hand and stay out of Terraform entirely. The billing clock starts here.
+13. First deploy: Artifact Registry and the Cloud Run service in Terraform, the image
+    built and pushed by hand, the Cloud Run URL added as a second redirect URI,
+    `COOKIE_SECURE=true`, and a real Google sign-in on the live URL.
+14. Scheduled refresh: the `cv-applier-refresh` job and the `cv-applier-nightly` trigger,
+    both Terraform resources.
+15. Deploy on push: one manual GitHub authorization, then a Terraform-managed Cloud
+    Build trigger on main.
 
 **Part 3 - Frontend**
 
@@ -659,6 +730,10 @@ containerised and nothing is deployed.
   card. That is a real safety net against a runaway bill, and it also means the app simply
   stops serving. Phase 21 writes the teardown checklist so that day is a decision rather
   than a surprise.
+- The Terraform state bucket is what makes "reproducible from a fresh checkout" true
+  rather than aspirational. Losing it means importing every existing resource into a new
+  state by hand instead of running `terraform apply`; the mitigation is that versioning
+  is on and nothing in this project ever deletes that bucket casually.
 
 Later phases, in the order they make sense:
 

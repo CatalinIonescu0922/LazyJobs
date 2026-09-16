@@ -10,7 +10,8 @@ letters, and track applications.
 - Auth: Google OpenID Connect. Accounts are an email plus `identities` rows. There
   is no password column.
 - Target platform: Google Cloud Platform in `europe-west1`. Cloud Run, Cloud SQL for
-  PostgreSQL, Cloud Storage, Vertex AI. See [PLAN.md](PLAN.md) section 4.
+  PostgreSQL, Cloud Storage, Vertex AI, provisioned with Terraform rather than the
+  console. See [PLAN.md](PLAN.md) section 4.
 
 ## Running the backend
 
@@ -40,7 +41,8 @@ both of those with migrations, for the reasons in [LEARNING.md](LEARNING.md) ent
 
 Nothing is deployed. No GCP project exists yet and nothing is being billed. The design,
 the cost model and the credit constraints are in [PLAN.md](PLAN.md) section 4; the
-commands that create each resource are in [BUILD.md](BUILD.md) phases 4, 12 to 15.
+Terraform and commands that create each resource are in [BUILD.md](BUILD.md) phases 4,
+12 to 15.
 
 ## Docs
 
