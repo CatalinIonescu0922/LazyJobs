@@ -11,8 +11,8 @@ Status values: `not started`, `in progress`, `blocked`, `done`.
 | Phase | What | Status | Notes |
 | --- | --- | --- | --- |
 | 1 | Application skeleton | done | verified: health 200, /docs 200, CORS preflight correct, 4 tables created |
-| 2 | Data model for identity | not started | |
-| 3 | Google sign-in | not started | needs a Google OAuth client from you, see BUILD.md prerequisites |
+| 2 | Data model for identity | done | verified: identities unique on (provider, subject); users has no password_hash |
+| 3 | Google sign-in | done | verified: /me 401, unknown provider 404, unconfigured google 503, callback rejects missing state, second identity reuses the same user. Live Google round-trip needs GOOGLE_CLIENT_ID in .env |
 | 4 | CV upload and profile | not started | |
 | 5 | eJobs source | not started | |
 | 6 | ATS source and coverage check | not started | |
@@ -36,6 +36,13 @@ Status values: `not started`, `in progress`, `blocked`, `done`.
   the pre-plan scaffolding had gone missing from disk; recreated them as documented in
   PLAN.md's Current state section (password-based User, no Identity table yet) before
   building main.py, the extended config, .env.example and .gitignore on top.
+- 2026-09-16: Phase 2 done. Removed `password_hash`, added `name` / `avatar_url` /
+  `last_login_at` on User, added Identity with `uq_identity_provider_subject`, dropped
+  bcrypt, deleted `cv_applier.db` and recreated the schema. AGENTS.md added (missed in
+  phase 1).
+- 2026-09-16: Phase 3 done. Google OIDC login/callback, JWT session cookie,
+  find-or-create with verified-email linking. Live browser sign-in not run:
+  `GOOGLE_CLIENT_ID` is still empty.
 
 ---
 

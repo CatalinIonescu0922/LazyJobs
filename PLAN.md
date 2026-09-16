@@ -3,10 +3,9 @@
 A web app that reads your CV, finds matching job openings for the Romanian market,
 drafts tailored cover letters, and tracks every application you submit.
 
-Status: plan only. No application code has been written yet beyond a partial backend
-skeleton (see [Current state](#current-state)). The phase-by-phase execution checklist
-lives in [BUILD.md](BUILD.md); live status for each phase is tracked in
-[PROGRESS.md](PROGRESS.md).
+Status: backend skeleton and identity tables exist; see [Current state](#current-state).
+The phase-by-phase execution checklist lives in [BUILD.md](BUILD.md); live status for
+each phase is tracked in [PROGRESS.md](PROGRESS.md).
 
 ---
 
@@ -117,8 +116,7 @@ is a config change rather than a rewrite.
 
 ## 4. Data model
 
-Defined in [backend/app/models.py](backend/app/models.py), which exists but needs the
-auth change described below.
+Defined in [backend/app/models.py](backend/app/models.py).
 
 - `users` - identity-independent account: email, display name, avatar URL, timestamps.
   No password column.
@@ -333,7 +331,7 @@ backend/
   requirements.txt              exists, drop bcrypt
   app/
     config.py  db.py            exist
-    models.py                   exists, needs users and identities change
+    models.py                   users and identities match the auth design
     main.py  session.py  oauth.py  llm.py  matching.py  cv.py
     sources/base.py  ejobs.py  ats.py  registry.py
     routers/auth.py  profile.py  jobs.py  applications.py
@@ -363,17 +361,19 @@ Rough effort: about a day and a half for the backend, about a day for the fronte
 
 ## 14. Current state
 
-Already written during the earlier session:
-
-- [backend/requirements.txt](backend/requirements.txt) - dependencies, installed and
-  verified importable in `backend/.venv`. `bcrypt` is now unnecessary.
-- [backend/app/config.py](backend/app/config.py) - settings from environment; needs the
-  Google client id, secret and redirect settings added.
+- [backend/app/main.py](backend/app/main.py) - FastAPI app, CORS, `/api/health`,
+  `create_all` on startup.
+- [backend/app/config.py](backend/app/config.py) - settings from environment, including
+  Google and frontend origin.
 - [backend/app/db.py](backend/app/db.py) - SQLAlchemy engine and session.
-- [backend/app/models.py](backend/app/models.py) - the tables described above, except
-  `users` still carries `password_hash` and there is no `identities` table yet.
+- [backend/app/session.py](backend/app/session.py) and
+  [backend/app/oauth.py](backend/app/oauth.py) - Google OpenID Connect with PKCE and
+  a JWT session cookie. See [docs/auth.md](docs/auth.md).
+- [backend/app/models.py](backend/app/models.py) - tables as in section 4. `users` has
+  no password column. `identities` is unique on `(provider, subject)`.
+- [backend/requirements.txt](backend/requirements.txt) - `bcrypt` removed.
 
-Nothing runs yet; there is no application entry point.
+CV parsing, sources, matching, and the frontend are not built yet.
 
 ---
 
