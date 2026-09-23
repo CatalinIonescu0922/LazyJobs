@@ -30,3 +30,51 @@ resource "google_project_service" "apis" {
   service = each.value
   disable_on_destroy = false
 }
+
+resource "google_storage_bucket" "state_bucket" {
+  name = "cv-applier-tfstate-${var.project_id}" 
+  location = "europe-west3"
+  uniform_bucket_level_access = true
+  force_destroy = false
+
+  versioning {
+    enabled = true
+  }
+  depends_on = [ google_project_service.storage_api ]
+}
+
+resource "google_billing_budget" "buget" {
+  billing_account = var.billing_account_id
+  display_name = "cv-applier"
+  amount {
+    specified_amount {
+      currency_code = "USD"
+      units = 50
+    } 
+  }
+  threshold_rules {
+    threshold_percent = 0.5
+
+  }
+  threshold_rules {
+    threshold_percent = 0.7
+  }
+  threshold_rules {
+    threshold_percent = 0.9
+  }
+  all_updates_rule {
+    monitoring_notification_channels = [
+      google_monitoring_notification_channel.email_alert.name
+    ]
+  }
+  depends_on = [ google_project_service.apis ]
+}
+
+resource "google_monitoring_notification_channel" "email_alert" {
+  display_name = "Buget email alert"
+  type = email
+
+  labels = {
+    email_address = "cata.ionescu2003@gmail.com"
+  }
+}
