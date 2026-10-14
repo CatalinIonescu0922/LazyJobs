@@ -9,7 +9,7 @@ letters, and track applications.
 - Frontend: Vite, React, TypeScript, Tailwind, in `frontend/` (not scaffolded yet)
 - Auth: Google OpenID Connect. Accounts are an email plus `identities` rows. There
   is no password column.
-- Target platform: Google Cloud Platform in `europe-west1`. Cloud Run, Cloud SQL for
+- Target platform: Google Cloud Platform in `europe-west3`. Cloud Run, Cloud SQL for
   PostgreSQL, Cloud Storage, Vertex AI, provisioned with Terraform rather than the
   console. See [PLAN.md](PLAN.md) section 4.
 
@@ -50,6 +50,7 @@ Subsystem docs live in `docs/` and are written in the same change as the code th
 describe.
 
 - [Authentication](docs/auth.md)
+- [Cloud foundation](docs/cloud.md)
 - Design: [PLAN.md](PLAN.md)
 - Phase checklist: [BUILD.md](BUILD.md)
 - Live phase status: [PROGRESS.md](PROGRESS.md)
