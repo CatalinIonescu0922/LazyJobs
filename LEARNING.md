@@ -415,7 +415,7 @@ print(c.models.generate_content(model='gemini-3.1-flash-lite', contents='ping').
 
 ## 10. Run PostgreSQL everywhere and drop SQLite entirely
 
-**Phase**: 5, local cloud-parity stack. Not built yet.
+**Phase**: 5, local cloud-parity stack.
 
 **The problem**: The backend was built on SQLite because it needs no server, and production
 was always going to be a managed database. That leaves the app developed against one engine
@@ -458,11 +458,10 @@ database's behaviour; the abstraction is leaky exactly where correctness lives.
 **Expires when**: the 0.6 GB of memory in `db-f1-micro` becomes the bottleneck, which it
 will under any serious workload, or the $10 a month stops being worth parity.
 
-**See it yourself**: today `rg -n sqlite backend/app/db.py backend/app/config.py` shows the
-two places it is wired in. The typing difference is one command:
-`sqlite3 :memory: "create table t (n integer); insert into t values ('abc'); select n,
-typeof(n) from t;"` prints `abc|text`. After phase 5:
-`docker compose exec db psql -U cv -d cv_applier -c "\dt"`.
+**See it yourself**: `docker compose exec db psql -U cv -d cv_applier -c "\dt"`. The typing
+difference those engines still have is one command against SQLite, which this app no longer
+uses: `sqlite3 :memory: "create table t (n integer); insert into t values ('abc'); select n,
+typeof(n) from t;"` prints `abc|text`.
 
 ---
 
@@ -612,7 +611,7 @@ The first lists three roles, the second shows the fourth.
 
 ## 14. Run a Cloud Storage emulator locally, not a storage abstraction
 
-**Phase**: 5, local cloud-parity stack. Not built yet.
+**Phase**: 5, local cloud-parity stack.
 
 **The problem**: Uploaded CVs go to Cloud Storage in production. Local development needs
 somewhere for them to go, and the instinctive fix is to define a storage interface with a
@@ -648,9 +647,9 @@ verification, so anything depending on those has to be proven against a real buc
 such as signed URLs verified by Google, lifecycle rules or IAM conditions. At that point
 the test for that feature moves to a real bucket rather than a new abstraction appearing.
 
-**See it yourself**: not runnable yet. After phase 5, `docker compose ps` lists the app
-alongside `db` and `gcs`, and `rg -n STORAGE_EMULATOR_HOST backend/app` should return
-nothing, because the switch lives in the environment and not in the code.
+**See it yourself**: `docker compose ps` lists the app alongside `db` and `gcs`.
+`rg -n STORAGE_EMULATOR_HOST backend/app` returns nothing, because the switch lives in the
+environment and not in the code.
 
 ---
 
@@ -663,7 +662,7 @@ definition is "whatever building main produces right now", then what is running 
 named, rollback has no target and two instances started minutes apart can differ.
 
 **What we did**: One image is built per commit, pushed to Artifact Registry at
-`europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend` and tagged with the commit sha.
+`europe-west3-docker.pkg.dev/PROJECT_ID/cv-applier/backend` and tagged with the commit sha.
 That exact image is what Cloud Run is pointed at, and promoting a change means deploying an
 already-built image rather than rebuilding it. Phase 15 wires this into a Cloud Build
 trigger on push to main. The free Artifact Registry allowance is 0.5 GB and a slim image is
@@ -694,8 +693,8 @@ repository and starts costing money beyond the 0.5 GB free allowance.
 
 ```
 gcloud artifacts docker images list \
-  europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend --include-tags
-gcloud run services describe cv-applier --region=europe-west1 \
+  europe-west3-docker.pkg.dev/PROJECT_ID/cv-applier/backend --include-tags
+gcloud run services describe cv-applier --region=europe-west3 \
   --format="value(spec.template.spec.containers[0].image)"
 ```
 
@@ -742,7 +741,7 @@ is the enabling condition rather than a separate nicety.
 the process turns out to be worth paying an idle instance for.
 
 **See it yourself**: not runnable yet. After phase 13, `gcloud run services describe
-cv-applier --region=europe-west1` shows the scaling bounds, and timing
+cv-applier --region=europe-west3` shows the scaling bounds, and timing
 `curl -s -o /dev/null -w "%{time_total}\n" https://SERVICE_URL/api/health` twice in a row
 shows the cold start on the first call and its absence on the second.
 
@@ -785,9 +784,9 @@ Kubernetes CronJob, or the web and worker dynos in a Heroku-style deployment.
 outgrows a single job and needs fanning out per source.
 
 **See it yourself**: not runnable yet. After phase 14, `gcloud scheduler jobs describe
-cv-applier-nightly --location=europe-west1` shows the `0 5 * * *` schedule and the
+cv-applier-nightly --location=europe-west3` shows the `0 5 * * *` schedule and the
 Europe/Bucharest timezone, and `gcloud run jobs execute cv-applier-refresh
---region=europe-west1 --wait` runs it by hand.
+--region=europe-west3 --wait` runs it by hand.
 
 ---
 
@@ -827,7 +826,7 @@ frontend cannot ship without the backend, and static assets are served by an app
 process rather than an edge cache.
 
 **Expires when**: the frontend needs its own release cadence, or asset latency outside
-Belgium becomes a real complaint. A CDN in front of the same origin is the intermediate
+Romania becomes a real complaint. A CDN in front of the same origin is the intermediate
 step before splitting them.
 
 **See it yourself**: today `rg -n "CORSMiddleware|allow_origins" backend/app/main.py` shows
@@ -881,7 +880,7 @@ signal of something wrong.
 
 ## 20. Replace `create_all` with Alembic, retiring the no-migrations decision
 
-**Phase**: 5, local cloud-parity stack. Not built yet.
+**Phase**: 5, local cloud-parity stack.
 
 **The problem**: Schema changes are currently applied by deleting the database. That was
 fine while the only data was test rows, and it stops being fine the moment there is a real
@@ -928,9 +927,8 @@ defended forever.
 blocks requests. At that point a single migration step is no longer the unit of work, and
 the process becomes expand/contract across two deploys.
 
-**See it yourself**: today `rg -n create_all backend/app/main.py` returns line 14, the call
-in the lifespan handler. After phase 5 it returns nothing, and `alembic current`, run in
-the app container, reports the applied revision.
+**See it yourself**: `rg -n create_all backend/app/main.py` returns nothing.
+`docker compose run --rm app alembic current` reports the applied revision.
 
 ---
 
@@ -1233,7 +1231,7 @@ resource.
 `terraform -chdir=infra/main state list | grep cloudbuild` lists the repository and the
 trigger as managed resources; the connection itself is absent from that list because it
 was always a data source, and `gcloud builds connections describe cv-applier-github
---region=europe-west1` is what actually shows it exists.
+--region=europe-west3` is what actually shows it exists.
 
 ---
 

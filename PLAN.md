@@ -25,7 +25,7 @@ and the concepts behind them.
 - Deterministic ranking of postings against your profile, with a readable reason per match.
 - LLM-drafted cover letter per application, editable before use.
 - Application tracker: matched, drafted, submitted, interview, rejected, discarded.
-- Deployment on Google Cloud Platform in `europe-west1`: the backend on Cloud Run, the
+- Deployment on Google Cloud Platform in `europe-west3`: the backend on Cloud Run, the
   database on Cloud SQL, uploaded CVs in Cloud Storage, the LLM on Vertex AI, and a
   nightly source refresh on Cloud Scheduler. Everything is proved locally under Docker
   Compose before anything chargeable is created.
@@ -143,8 +143,8 @@ that deploys.
 
 ## 4. Cloud design
 
-Everything lives in one GCP project in `europe-west1` (Belgium), the closest region to
-the Romanian market, except Vertex AI, which is called on the `global` location because
+Everything lives in one GCP project in `europe-west3` (Frankfurt), a European region
+close to the Romanian market, except Vertex AI, which is called on the `global` location because
 the global endpoint is the cheapest. Google's own docs now brand Vertex AI as "Gemini
 Enterprise Agent Platform"; it is the same product under a new name, and this document
 calls it Vertex AI throughout.
@@ -159,7 +159,7 @@ calls it Vertex AI throughout.
 | Cloud Storage, bucket `cv-applier-uploads-PROJECT_ID` | The uploaded PDFs and DOCX files. Uniform bucket-level access, not public | The container filesystem disappears with the instance. Storing the file in a database row streams large blobs through a 0.6 GB instance for no gain |
 | Vertex AI, `gemini-3.1-flash-lite` | CV extraction and cover-letter drafting. See section 10 | The Gemini API in AI Studio is the same model, a different product, and the trial credit cannot pay for it. See the billing trap below |
 | Secret Manager | Holds `GOOGLE_CLIENT_SECRET` and `JWT_SECRET`. Cloud Run injects them as environment variables | Passing secrets on the deploy command leaves them in shell history and in the revision config, where anyone with read access to the service can recover them |
-| Artifact Registry, `europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend` | Holds the container image | 0.5 GB is free and a slim image is around 200 MB, so the only rule is to keep at most two tags |
+| Artifact Registry, `europe-west3-docker.pkg.dev/PROJECT_ID/cv-applier/backend` | Holds the container image | 0.5 GB is free and a slim image is around 200 MB, so the only rule is to keep at most two tags |
 | Cloud Build | Builds the image and deploys on a push to main | Building on the laptop works, but then the only machine that can ship is that laptop |
 | Cloud Scheduler, job `cv-applier-nightly` | Cron `0 5 * * *`, Europe/Bucharest, triggering the `cv-applier-refresh` Cloud Run job | A source refresh walks sitemaps at one request per second for minutes. As an HTTP endpoint it would fight the request timeout and be callable by anyone; as a job it has its own timeout and no public surface |
 | Cloud Logging | Structured JSON on stdout, parsed into fields | The first 50 GiB a month is free, so there is no reason to ship logs anywhere else |
@@ -303,8 +303,8 @@ the same values.
 | --- | --- | --- |
 | Cloud Run | $0 | Free tier covers 2M requests, 180k vCPU-seconds and 360k GiB-seconds a month. Scale to zero means an idle app costs nothing. |
 | Cloud SQL `db-f1-micro` + 10 GB SSD | about $10 a month | $0.0105 an hour for the instance plus about $1.70 a month for storage. No free tier. This is the only meaningful running cost. |
-| Cloud Storage | under $0.10 a month | The 5 GB free tier is US-only, so `europe-west1` bills from the first byte at about $0.02 per GB-month. |
-| Terraform state bucket | under $0.01 a month | A handful of small JSON files in `europe-west1`, billed the same as the uploads bucket. |
+| Cloud Storage | under $0.10 a month | The 5 GB free tier is US-only, so `europe-west3` bills from the first byte at about $0.02 per GB-month. |
+| Terraform state bucket | under $0.01 a month | A handful of small JSON files in `europe-west3`, billed the same as the uploads bucket. |
 | Vertex AI, `gemini-3.1-flash-lite` | about $0.005 per cover letter | $0.25 per million input tokens, $1.50 per million output tokens. |
 | Artifact Registry | $0 | 0.5 GB free. A slim image is around 200 MB, so keep at most two tags. |
 | Secret Manager | $0 | 6 active secret versions and 10,000 access operations free per month. |

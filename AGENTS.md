@@ -15,16 +15,11 @@ letters, and track applications.
 
 ## Running the backend
 
-The backend currently runs directly on the host against SQLite. Phase 5 replaces this
-with Docker Compose and PostgreSQL; until then:
+The backend runs in Docker Compose against PostgreSQL. From the repo root:
 
 ```
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn app.main:app --reload
+cp backend/.env.example backend/.env
+docker compose up --build
 ```
 
 Health check: `curl localhost:8000/api/health`. OpenAPI: `http://localhost:8000/docs`.
@@ -33,9 +28,12 @@ CORS is locked to `FRONTEND_ORIGIN` (default `http://localhost:5173`).
 Sign-in: set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `backend/.env`, then
 open `http://localhost:8000/api/auth/google/login`.
 
-There is no Alembic yet. `Base.metadata.create_all` runs on startup. If the schema
-changes before phase 5, delete `backend/cv_applier.db` and restart. Phase 5 replaces
-both of those with migrations, for the reasons in [LEARNING.md](LEARNING.md) entry 20.
+Schema changes are Alembic revisions applied with
+`docker compose run --rm app alembic upgrade head`. The process does not create or
+alter tables on startup. See [LEARNING.md](LEARNING.md) entry 20.
+
+Compose also runs Postgres 16 as `db` and a Cloud Storage emulator as `gcs`.
+`STORAGE_EMULATOR_HOST` in `backend/.env` points the storage client at the emulator.
 
 ## Cloud
 

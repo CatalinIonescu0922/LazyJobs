@@ -3,7 +3,7 @@ Type, do not paste-and-forget. Order:
 
 variables.tf — project_id, billing_account_id, no defaults.
 terraform.tfvars — real values (gitignored). Billing id from gcloud billing accounts list.
-main.tf — provider ~> 7.44, europe-west1, billing_project + user_project_override = true, then three resources:
+main.tf — provider ~> 7.44, europe-west3, billing_project + user_project_override = true, then three resources:
 four APIs (cloudresourcemanager, serviceusage, billingbudgets, storage)
 state bucket cv-applier-tfstate-${var.project_id} (versioned, force_destroy = false)
 budget display name cv-applier, $50, thresholds 0.5 / 0.9 / 1.0

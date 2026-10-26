@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
-    database_url: str = "sqlite:///./cv_applier.db"
+    database_url: str = "postgresql+psycopg://cv:cv@db:5432/cv_applier"
     jwt_secret: str = "dev-secret-change-me"
     jwt_ttl_hours: int = 24 * 14
     frontend_origin: str = "http://localhost:5173"

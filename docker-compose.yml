@@ -1,0 +1,33 @@
+services:
+  app:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - backend/.env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: cv
+      POSTGRES_PASSWORD: cv
+      POSTGRES_DB: cv_applier
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cv -d cv_applier"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+  gcs:
+    image: fsouza/fake-gcs-server
+    ports:
+      - "4443:4443"
+    command: ["-scheme", "http", "-external-url", "http://gcs:4443"]
+
+volumes:
+  pgdata:

@@ -18,7 +18,7 @@ Conventions used below:
   placeholders. Substitute your own values; every other name is fixed and is used
   verbatim across phases.
 
-Everything lives in `europe-west1` (Belgium), except Vertex AI, which uses the `global`
+Everything lives in `europe-west3` (Frankfurt), except Vertex AI, which uses the `global`
 endpoint.
 
 ---
@@ -277,7 +277,7 @@ terraform {
 
 provider "google" {
   project               = var.project_id
-  region                = "europe-west1"
+  region                = "europe-west3"
   billing_project       = var.project_id
   user_project_override = true
 }
@@ -294,7 +294,7 @@ resource "google_project_service" "bootstrap_apis" {
 
 resource "google_storage_bucket" "tfstate" {
   name                        = "cv-applier-tfstate-${var.project_id}"
-  location                    = "europe-west1"
+  location                    = "europe-west3"
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
   force_destroy               = false
@@ -380,7 +380,7 @@ terraform {
 
 provider "google" {
   project = var.project_id
-  region  = "europe-west1"
+  region  = "europe-west3"
 }
 
 resource "google_project_service" "apis" {
@@ -716,7 +716,7 @@ uses it, which is the only meaningful running cost in the whole project.
 resource "google_sql_database_instance" "db" {
   name                = "cv-applier-db"
   database_version    = "POSTGRES_16"
-  region              = "europe-west1"
+  region              = "europe-west3"
   deletion_protection = false
 
   settings {
@@ -758,7 +758,7 @@ The bucket is named after the project so it is globally unique:
 ```hcl
 resource "google_storage_bucket" "uploads" {
   name                        = "cv-applier-uploads-${var.project_id}"
-  location                    = "europe-west1"
+  location                    = "europe-west3"
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
 }
@@ -802,7 +802,7 @@ with the application's own tooling. In one terminal:
 
 ```
 gcloud sql instances describe cv-applier-db --format='value(connectionName)'
-./cloud-sql-proxy PROJECT_ID:europe-west1:cv-applier-db --port 5433
+./cloud-sql-proxy PROJECT_ID:europe-west3:cv-applier-db --port 5433
 ```
 
 In another, with the proxy still running:
@@ -849,7 +849,7 @@ rather than as a separate command:
 
 ```hcl
 resource "google_artifact_registry_repository" "backend" {
-  location               = "europe-west1"
+  location               = "europe-west3"
   repository_id          = "cv-applier"
   format                 = "DOCKER"
   cleanup_policy_dry_run = false
@@ -882,11 +882,11 @@ Build and push. An image build is not infrastructure, so it stays a plain Docker
 run by hand, tagged with the commit sha, never `latest`; phase 15 explains why.
 
 ```
-gcloud auth configure-docker europe-west1-docker.pkg.dev
+gcloud auth configure-docker europe-west3-docker.pkg.dev
 
 TAG=$(git rev-parse --short HEAD)
-docker build -t europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend:$TAG backend
-docker push europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend:$TAG
+docker build -t europe-west3-docker.pkg.dev/PROJECT_ID/cv-applier/backend:$TAG backend
+docker push europe-west3-docker.pkg.dev/PROJECT_ID/cv-applier/backend:$TAG
 ```
 
 Now the service, in Terraform, pointed at the image you just pushed:
@@ -894,7 +894,7 @@ Now the service, in Terraform, pointed at the image you just pushed:
 ```hcl
 resource "google_cloud_run_v2_service" "app" {
   name     = "cv-applier"
-  location = "europe-west1"
+  location = "europe-west3"
   ingress  = "INGRESS_TRAFFIC_ALL"
 
   template {
@@ -904,7 +904,7 @@ resource "google_cloud_run_v2_service" "app" {
       max_instance_count = 3
     }
     containers {
-      image = "europe-west1-docker.pkg.dev/${var.project_id}/cv-applier/backend:TAG"
+      image = "europe-west3-docker.pkg.dev/${var.project_id}/cv-applier/backend:TAG"
 
       env {
         name  = "GOOGLE_CLOUD_PROJECT"
@@ -1017,9 +1017,9 @@ imperatively, the one ordering problem in this phase that patching by hand is th
 ordinary answer to, not a compromise:
 
 ```
-SERVICE_URL=$(gcloud run services describe cv-applier --region=europe-west1 --format='value(status.url)')
+SERVICE_URL=$(gcloud run services describe cv-applier --region=europe-west3 --format='value(status.url)')
 
-gcloud run services update cv-applier --region=europe-west1 \
+gcloud run services update cv-applier --region=europe-west3 \
   --update-env-vars="FRONTEND_ORIGIN=$SERVICE_URL,GOOGLE_REDIRECT_URI=$SERVICE_URL/api/auth/google/callback"
 ```
 
@@ -1045,7 +1045,7 @@ cause:
 
 **Verify** - open `$SERVICE_URL/api/health`, then `$SERVICE_URL/api/auth/google/login` in a
 browser and complete a real Google sign-in. Logs are at
-`gcloud run services logs read cv-applier --region=europe-west1 --limit=50`.
+`gcloud run services logs read cv-applier --region=europe-west3 --limit=50`.
 
 **Done when** - sign-in against the live URL ends on the app with a session cookie,
 `/api/auth/me` returns your email over HTTPS, and `terraform -chdir=infra/main plan`
@@ -1077,7 +1077,7 @@ that it does not have.
 ```hcl
 resource "google_cloud_run_v2_job" "refresh" {
   name     = "cv-applier-refresh"
-  location = "europe-west1"
+  location = "europe-west3"
 
   template {
     template {
@@ -1086,7 +1086,7 @@ resource "google_cloud_run_v2_job" "refresh" {
       timeout         = "1800s"
 
       containers {
-        image   = "europe-west1-docker.pkg.dev/${var.project_id}/cv-applier/backend:TAG"
+        image   = "europe-west3-docker.pkg.dev/${var.project_id}/cv-applier/backend:TAG"
         command = ["python"]
         args    = ["-m", "app.refresh"]
 
@@ -1152,12 +1152,12 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
 
 resource "google_cloud_scheduler_job" "nightly" {
   name      = "cv-applier-nightly"
-  region    = "europe-west1"
+  region    = "europe-west3"
   schedule  = "0 5 * * *"
   time_zone = "Europe/Bucharest"
 
   http_target {
-    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/europe-west1/jobs/cv-applier-refresh:run"
+    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/europe-west3/jobs/cv-applier-refresh:run"
     http_method = "POST"
     oauth_token {
       service_account_email = google_service_account.runtime.email
@@ -1173,11 +1173,11 @@ terraform apply
 Run it once by hand before trusting the schedule:
 
 ```
-gcloud run jobs execute cv-applier-refresh --region=europe-west1 --wait
+gcloud run jobs execute cv-applier-refresh --region=europe-west3 --wait
 ```
 
-**Verify** - `gcloud scheduler jobs run cv-applier-nightly --location=europe-west1`, then
-`gcloud run jobs executions list --job=cv-applier-refresh --region=europe-west1`
+**Verify** - `gcloud scheduler jobs run cv-applier-nightly --location=europe-west3`, then
+`gcloud run jobs executions list --job=cv-applier-refresh --region=europe-west3`
 
 **Done when** - the forced run shows a succeeded execution, and the next morning the job
 count is higher than it was the night before.
@@ -1197,17 +1197,17 @@ the trigger declared in Terraform on top of the one manual step Terraform cannot
 ```yaml
 steps:
   - name: gcr.io/cloud-builders/docker
-    args: ["build", "-t", "europe-west1-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA", "backend"]
+    args: ["build", "-t", "europe-west3-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA", "backend"]
   - name: gcr.io/cloud-builders/docker
-    args: ["push", "europe-west1-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA"]
+    args: ["push", "europe-west3-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA"]
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
       - run
       - deploy
       - cv-applier
-      - --image=europe-west1-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA
-      - --region=europe-west1
+      - --image=europe-west3-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA
+      - --region=europe-west3
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -1215,8 +1215,8 @@ steps:
       - jobs
       - update
       - cv-applier-refresh
-      - --image=europe-west1-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA
-      - --region=europe-west1
+      - --image=europe-west3-docker.pkg.dev/$PROJECT_ID/cv-applier/backend:$SHORT_SHA
+      - --region=europe-west3
 options:
   logging: CLOUD_LOGGING_ONLY
 ```
@@ -1239,19 +1239,19 @@ trigger on top of it:
 
 ```hcl
 data "google_cloudbuildv2_connection" "github" {
-  location = "europe-west1"
+  location = "europe-west3"
   name     = "cv-applier-github"
 }
 
 resource "google_cloudbuildv2_repository" "repo" {
-  location          = "europe-west1"
+  location          = "europe-west3"
   name              = "cv-applier"
   parent_connection = data.google_cloudbuildv2_connection.github.name
   remote_uri        = "https://github.com/GITHUB_OWNER/GITHUB_REPO.git"
 }
 
 resource "google_cloudbuild_trigger" "on_push" {
-  location = "europe-west1"
+  location = "europe-west3"
 
   repository_event_config {
     repository = google_cloudbuildv2_repository.repo.id
@@ -1295,12 +1295,12 @@ Artifact Registry inside its free 0.5 GB is already on the repository resource f
 phase 13, so there is nothing further to configure here.
 
 **Verify** - push a trivial change to `main`, watch
-`gcloud builds list --region=europe-west1 --limit=5`, then confirm the new revision:
-`gcloud run revisions list --service=cv-applier --region=europe-west1`
+`gcloud builds list --region=europe-west3 --limit=5`, then confirm the new revision:
+`gcloud run revisions list --service=cv-applier --region=europe-west3`
 
 **Done when** - the push produced a green build, a new revision whose image tag is that
 commit's sha, a refresh job pointed at the same tag, and
-`gcloud artifacts docker images list europe-west1-docker.pkg.dev/PROJECT_ID/cv-applier/backend`
+`gcloud artifacts docker images list europe-west3-docker.pkg.dev/PROJECT_ID/cv-applier/backend`
 holds no more than two images.
 
 Effort: 2 hours, longer than it looks because the GitHub connection step is fiddly the
@@ -1463,7 +1463,7 @@ phase 4 budget is still attached with `gcloud billing budgets list --billing-acc
 | --- | --- | --- |
 | Cloud Run | $0 | Free tier covers 2M requests, 180k vCPU-seconds and 360k GiB-seconds a month. Scale to zero means an idle app costs nothing. |
 | Cloud SQL `db-f1-micro` + 10 GB SSD | about $10 a month | $0.0105 an hour for the instance plus about $1.70 a month for storage. No free tier. This is the only meaningful running cost. |
-| Cloud Storage | under $0.10 a month | The 5 GB free tier is US-only, so `europe-west1` bills from the first byte at about $0.02 per GB-month. |
+| Cloud Storage | under $0.10 a month | The 5 GB free tier is US-only, so `europe-west3` bills from the first byte at about $0.02 per GB-month. |
 | Terraform state bucket | under $0.01 a month | A handful of small JSON files, billed the same as the uploads bucket. |
 | Vertex AI, `gemini-3.1-flash-lite` | about $0.005 per cover letter | $0.25 per million input tokens, $1.50 per million output tokens. |
 | Artifact Registry | $0 | 0.5 GB free. A slim image is around 200 MB, so keep at most two tags. |

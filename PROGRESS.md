@@ -14,8 +14,8 @@ Status values: `not started`, `in progress`, `blocked`, `done`.
 | 1 | Application skeleton | done | verified: health 200, /docs 200, CORS preflight correct, 4 tables created |
 | 2 | Data model for identity | done | verified: identities unique on (provider, subject); users has no password_hash |
 | 3 | Google sign-in | done | verified: /me 401, unknown provider 404, unconfigured google 503, callback rejects missing state, second identity reuses the same user. Live Google round-trip needs GOOGLE_CLIENT_ID in .env |
-| 4 | GCP project and guardrails | done | verified: both states in the tfstate bucket, bootstrap plan clean, 11 resources in main, Vertex call returned "Ready". Region is europe-west3 |
-| 5 | Local cloud-parity stack | not started | Docker Compose, Postgres 16, fake-gcs-server, Alembic. SQLite dropped here |
+| 4 | GCP project and guardrails | done | verified: both states in the tfstate bucket, bootstrap plan clean, 11 resources in main, Vertex call returned "Ready". Region europe-west3 |
+| 5 | Local cloud-parity stack | done | Docker Compose, Postgres 16, fake-gcs-server, Alembic. SQLite and create_all removed |
 | 6 | CV upload and profile | not started | Cloud Storage for the file, Vertex AI for extraction |
 | 7 | eJobs source | not started | |
 | 8 | ATS source and coverage check | not started | the Romania-eligible count gets recorded here |
@@ -91,7 +91,9 @@ against what actually happened.
   recorded in LEARNING.md entries 21 to 26. No code changed.
 - 2026-10-14: Phase 4 done. Fixed bootstrap `main.tf` (it no longer validated), imported
   the existing bucket, budget and channel into state, applied `infra/main`. Region is
-  europe-west3, not europe-west1 as PLAN.md says; the state bucket was already there.
+  Region standardized to europe-west3 across PLAN.md and BUILD.md. State bucket was already there.
+- 2026-10-26: Phase 5 done. The app container runs against Postgres 16 and fake-gcs-server.
+  Alembic owns the schema. SQLite and startup `create_all` are gone.
 
 ---
 
