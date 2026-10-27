@@ -114,7 +114,8 @@ def _country_code(value: Any) -> str:
         value = value.get("name") or value.get("value")
     text = str(value or "").strip()
     if len(text) == 2:
-        return text.upper()
+        code = text.upper()
+        return code if pycountry.countries.get(alpha_2=code) else ""
     match = pycountry.countries.search_fuzzy(text) if text else []
     return match[0].alpha_2 if match else ""
 

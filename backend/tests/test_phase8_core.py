@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.sources.extract import extract_jsonld
+from app.sources.extract import _country_code, extract_jsonld
 from app.sources.fetch import FetchError, SafeFetcher
 from app.textnorm import fingerprint, normalise
 
@@ -24,6 +24,13 @@ def test_extract_jsonld_graph_salary_and_plain_description():
     assert posting.eligible_countries == ["RO"]
     assert posting.salary_min == 2000
     assert posting.salary_max == 3000
+
+
+def test_country_values_are_real_iso_alpha2_codes():
+    assert _country_code("RO") == "RO"
+    assert _country_code("DE") == "DE"
+    assert _country_code("Romania") == "RO"
+    assert _country_code("XX") == ""
 
 
 def test_fetch_rejects_non_https():

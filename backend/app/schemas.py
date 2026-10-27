@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import pycountry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -44,7 +45,7 @@ class ProfileUpdate(BaseModel):
     def validate_country(cls, value: str | None) -> str | None:
         if value is not None:
             value = value.strip().upper()
-            if value and (len(value) != 2 or not value.isalpha()):
+            if value and (len(value) != 2 or not value.isalpha() or pycountry.countries.get(alpha_2=value) is None):
                 raise ValueError("country must be an ISO alpha-2 code")
         return value
 
@@ -72,7 +73,10 @@ class ExtractedProfile(BaseModel):
     @field_validator("country")
     @classmethod
     def normalize_country(cls, value: str) -> str:
-        return value.strip().upper()
+        value = value.strip().upper()
+        if value and pycountry.countries.get(alpha_2=value) is None:
+            raise ValueError("country must be an ISO alpha-2 code")
+        return value
 
     @field_validator("salary_currency")
     @classmethod
