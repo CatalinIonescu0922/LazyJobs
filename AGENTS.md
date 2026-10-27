@@ -6,7 +6,7 @@ letters, and track applications.
 ## Stack
 
 - Backend: FastAPI, SQLAlchemy 2, in `backend/`
-- Frontend: Vite, React, TypeScript, Tailwind, in `frontend/` (not scaffolded yet)
+- Frontend: Vite, React, TypeScript, Tailwind, in `frontend/`
 - Auth: Google OpenID Connect. Accounts are an email plus `identities` rows. There
   is no password column.
 - Target platform: Google Cloud Platform in `europe-west3`. Cloud Run, Cloud SQL for
@@ -26,7 +26,31 @@ Health check: `curl localhost:8000/api/health`. OpenAPI: `http://localhost:8000/
 CORS is locked to `FRONTEND_ORIGIN` (default `http://localhost:5173`).
 
 Sign-in: set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `backend/.env`, then
-open `http://localhost:8000/api/auth/google/login`.
+open the frontend and click Continue with Google. The backend alone can be checked at
+`http://localhost:8000/api/auth/google/login`.
+
+## Running the frontend
+
+The frontend runs on the host, next to the compose stack, with hot reload. From
+`frontend/`:
+
+```
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. Vite proxies `/api` to port 8000.
+
+If the code runs on a remote machine reached over SSH, the browser on your own
+computer has to reach both ports on that machine. Forward them when you connect:
+
+```
+ssh -L 5173:localhost:5173 -L 8000:localhost:8000 user@remote-host
+```
+
+Then open `http://localhost:5173` on your own computer. The Google OAuth redirect
+goes to `http://localhost:8000` on your computer, which the same forwarding carries to
+the backend. Without the forwarding, sign-in fails with a connection error.
 
 Schema changes are Alembic revisions applied with
 `docker compose run --rm app alembic upgrade head`. The process does not create or
@@ -48,6 +72,7 @@ Subsystem docs live in `docs/` and are written in the same change as the code th
 describe.
 
 - [Authentication](docs/auth.md)
+- [Frontend](docs/frontend.md)
 - [Cloud foundation](docs/cloud.md)
 - [How jobs are found and used](docs/how-it-works.md) (design, not built yet)
 - Design: [PLAN.md](PLAN.md)

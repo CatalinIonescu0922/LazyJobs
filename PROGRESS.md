@@ -16,7 +16,7 @@ Status values: `not started`, `in progress`, `blocked`, `done`.
 | 3 | Google sign-in | done | verified: /me 401, unknown provider 404, unconfigured google 503, callback rejects missing state, second identity reuses the same user. Live Google round-trip needs GOOGLE_CLIENT_ID in .env |
 | 4 | GCP project and guardrails | done | verified: both states in the tfstate bucket, bootstrap plan clean, 11 resources in main, Vertex call returned "Ready". Region europe-west3 |
 | 5 | Local cloud-parity stack | done | Docker Compose, Postgres 16, fake-gcs-server, Alembic. SQLite and create_all removed |
-| 6 | Frontend shell and sign-in | not started | first live Google login in a browser; needs the OAuth client from BUILD.md Prerequisites |
+| 6 | Frontend shell and sign-in | in progress | built; sign-in redirect, proxy and protected route checked. The live Google login and sign-out still to run in a browser |
 | 7 | CV upload and profile | not started | API plus Profile screen. Cloud Storage for the file, Vertex AI for extraction, adds `profiles.country`, `city` and `salary_currency` |
 | 8 | Job sources and the generic crawler | not started | board discovery, validation, JSON-LD tier, Job boards screen, adds `job_sources`, fingerprints and salary |
 | 9 | LLM extraction tier and coverage check | not started | the coverage table gets recorded in BUILD.md here |
@@ -139,6 +139,12 @@ against what actually happened.
   description overlap so a rewritten repost keeps its earliest date. An agency is labelled
   once per company and stored switched off. About 59 hours. Decision in LEARNING.md
   entry 35. No code changed.
+- 2026-10-27: Phase 6 built: Vite, React, TypeScript, Tailwind, TanStack Query and React
+  Router in `frontend/`, with sign-in, a protected Home and the API wrapper. Checked: the
+  backend redirects to Google with the configured client, `/api` proxies to port 8000, and
+  a signed-out visit to `/` lands on `/sign-in`. Status stays in progress until a real
+  Google sign-in and sign-out are run in a browser. Decision: sign-in is a plain link, not
+  a fetch, because the login is a chain of redirects. See `docs/frontend.md`.
 
 ---
 

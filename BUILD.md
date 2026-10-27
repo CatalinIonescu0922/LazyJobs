@@ -604,7 +604,7 @@ own ADC locally, the attached service account in production - so "no key configu
 not a state this app can be in, and a fallback path nobody exercises is a liability.
 
 `PATCH /api/profile` accepts corrections to every extracted field plus the search
-preferences. `country` must match `^[A-Z]{2}$`. `min_salary` is a monthly amount in
+preferences. `country` must match `^[A-Z]{2}$`. `min_salary` is a monthly amount in   
 `salary_currency`, an ISO 4217 code, and the salary filter in phase 10 stays off while the
 currency is empty.
 
