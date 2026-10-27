@@ -5,6 +5,15 @@ services:
       - "8000:8000"
     env_file:
       - backend/.env
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_application_credentials.json
+    secrets:
+      - source: google_adc
+        target: google_application_credentials.json
+    command: >-
+      sh -c "alembic upgrade head && exec uvicorn app.main:app
+      --host 0.0.0.0 --port $${PORT:-8000}
+      --proxy-headers --forwarded-allow-ips='*'"
     depends_on:
       db:
         condition: service_healthy
@@ -31,3 +40,7 @@ services:
 
 volumes:
   pgdata:
+
+secrets:
+  google_adc:
+    file: ${HOME}/.config/gcloud/application_default_credentials.json

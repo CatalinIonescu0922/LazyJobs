@@ -29,6 +29,10 @@ Sign-in: set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `backend/.env`, th
 open the frontend and click Continue with Google. The backend alone can be checked at
 `http://localhost:8000/api/auth/google/login`.
 
+CV extraction uses Vertex AI. Run `gcloud auth application-default login` on the host;
+Compose exposes only that ADC file as a read-only secret to the app container for local
+development. It is never copied into the image or stored in `backend/.env`.
+
 ## Running the frontend
 
 The frontend runs on the host, next to the compose stack, with hot reload. From
@@ -52,9 +56,10 @@ Then open `http://localhost:5173` on your own computer. The Google OAuth redirec
 goes to `http://localhost:8000` on your computer, which the same forwarding carries to
 the backend. Without the forwarding, sign-in fails with a connection error.
 
-Schema changes are Alembic revisions applied with
-`docker compose run --rm app alembic upgrade head`. The process does not create or
-alter tables on startup. See [LEARNING.md](LEARNING.md) entry 20.
+Schema changes are Alembic revisions. The Compose app runs
+`alembic upgrade head` before starting the API, so `docker compose up --build`
+creates or upgrades the schema automatically. For a one-off migration without
+starting the API, use `docker compose run --rm app alembic upgrade head`.
 
 Compose also runs Postgres 16 as `db` and a Cloud Storage emulator as `gcs`.
 `STORAGE_EMULATOR_HOST` in `backend/.env` points the storage client at the emulator.
@@ -72,6 +77,8 @@ Subsystem docs live in `docs/` and are written in the same change as the code th
 describe.
 
 - [Authentication](docs/auth.md)
+- [Candidate profile](docs/profile.md)
+- [Job sources](docs/sources.md)
 - [Frontend](docs/frontend.md)
 - [Cloud foundation](docs/cloud.md)
 - [How jobs are found and used](docs/how-it-works.md) (design, not built yet)

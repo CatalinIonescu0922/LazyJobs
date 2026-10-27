@@ -9,5 +9,8 @@ pyjwt==2.10.1
 httpx==0.28.1
 pdfplumber==0.11.4
 python-docx==1.1.2
-openai==1.59.6
 google-genai==2.30.1
+google-cloud-storage==3.1.0
+beautifulsoup4==4.13.4
+pycountry==24.6.1
+pytest==8.3.4

@@ -17,8 +17,8 @@ Status values: `not started`, `in progress`, `blocked`, `done`.
 | 4 | GCP project and guardrails | done | verified: both states in the tfstate bucket, bootstrap plan clean, 11 resources in main, Vertex call returned "Ready". Region europe-west3 |
 | 5 | Local cloud-parity stack | done | Docker Compose, Postgres 16, fake-gcs-server, Alembic. SQLite and create_all removed |
 | 6 | Frontend shell and sign-in | in progress | built; sign-in redirect, proxy and protected route checked. The live Google login and sign-out still to run in a browser |
-| 7 | CV upload and profile | not started | API plus Profile screen. Cloud Storage for the file, Vertex AI for extraction, adds `profiles.country`, `city` and `salary_currency` |
-| 8 | Job sources and the generic crawler | not started | board discovery, validation, JSON-LD tier, Job boards screen, adds `job_sources`, fingerprints and salary |
+| 7 | CV upload and profile | done | PDF/DOCX upload, Cloud Storage emulator, Vertex AI extraction, editable Profile screen, adds `profiles.country`, `city` and `salary_currency` |
+| 8 | Job sources and the generic crawler | done | board discovery, safe sitemap crawler, JSON-LD extraction, Sources screen, adds `job_sources`, fingerprints and salary; focused tests pass |
 | 9 | LLM extraction tier and coverage check | not started | the coverage table gets recorded in BUILD.md here |
 | 10 | Matching and the Matches screen | not started | duplicate grouping including same-company description overlap, boolean keyword query, hidden companies, salary and seniority; adds `profiles.hidden_companies` and `keyword_query` |
 | 11 | Applications, cover letters and the Tracker | not started | Vertex AI |
@@ -145,6 +145,13 @@ against what actually happened.
   a signed-out visit to `/` lands on `/sign-in`. Status stays in progress until a real
   Google sign-in and sign-out are run in a browser. Decision: sign-in is a plain link, not
   a fetch, because the login is a chain of redirects. See `docs/frontend.md`.
+- 2026-10-27: Phase 7 built: CV upload and PDF/DOCX extraction, Vertex AI structured profile
+  parsing, emulator-compatible Cloud Storage, profile migration and editor. Verified with
+  the frontend build, container startup, migration head `7c4f1b8e2d9a`, and API health.
+- 2026-10-27: Phase 8 built: generic board discovery, robots/address-safe sitemap fetching,
+  JSON-LD `JobPosting` extraction, monthly salary and fingerprint fields, source API and
+  Sources screen. Migration head is `8d2f3c4b5a6e`; focused crawler tests pass and the
+  frontend build is clean. Live board discovery remains a browser verification step.
 
 ---
 

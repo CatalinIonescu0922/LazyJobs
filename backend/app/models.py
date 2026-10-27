@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -54,6 +54,9 @@ class Profile(Base):
     titles: Mapped[list] = mapped_column(JSON, default=list)
     skills: Mapped[list] = mapped_column(JSON, default=list)
     years_experience: Mapped[float] = mapped_column(Float, default=0)
+    country: Mapped[str] = mapped_column(String(2), default="")
+    city: Mapped[str] = mapped_column(String(255), default="")
+    salary_currency: Mapped[str] = mapped_column(String(3), default="")
 
     preferred_locations: Mapped[list] = mapped_column(JSON, default=list)
     remote_only: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -70,8 +73,8 @@ class Job(Base):
     __table_args__ = (UniqueConstraint("source", "external_id", name="uq_job_source_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    source: Mapped[str] = mapped_column(String(32), index=True)
-    external_id: Mapped[str] = mapped_column(String(255))
+    source: Mapped[str] = mapped_column(String(255), index=True)
+    external_id: Mapped[str] = mapped_column(String(1024))
     url: Mapped[str] = mapped_column(String(1024))
     apply_url: Mapped[str] = mapped_column(String(1024), default="")
 
@@ -83,6 +86,33 @@ class Job(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    eligible_countries: Mapped[list] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    salary_min: Mapped[int | None] = mapped_column(nullable=True)
+    salary_max: Mapped[int | None] = mapped_column(nullable=True)
+    salary_currency: Mapped[str] = mapped_column(String(3), default="")
+    fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class JobSource(Base):
+    __tablename__ = "job_sources"
+    __table_args__ = (UniqueConstraint("user_id", "kind", "domain", name="uq_user_job_source_kind_domain"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    domain: Mapped[str] = mapped_column(String(255))
+    kind: Mapped[str] = mapped_column(String(32), default="board")
+    status: Mapped[str] = mapped_column(String(32), default="candidate", index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    extraction: Mapped[str] = mapped_column(String(32), default="")
+    sitemap_url: Mapped[str] = mapped_column(String(1024), default="")
+    posting_prefix: Mapped[str] = mapped_column(String(1024), default="")
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    posting_count: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    user: Mapped[User] = relationship()
 
 
 # Review queue: a match becomes an application only once the user submits it themselves.

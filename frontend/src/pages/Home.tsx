@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { logout, meQuery } from "../api";
 
 export default function Home() {
@@ -32,6 +32,18 @@ export default function Home() {
             />
           )}
           <span className="text-sm text-slate-700">{me.name || me.email}</span>
+          <Link
+            to="/profile"
+            className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100"
+          >
+            Profile
+          </Link>
+          <Link
+            to="/sources"
+            className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100"
+          >
+            Job boards
+          </Link>
           <button
             type="button"
             onClick={() => signOut.mutate()}

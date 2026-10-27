@@ -13,9 +13,13 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
 
-    openai_api_key: str = ""
-    openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-4o-mini"
+    google_cloud_project: str = ""
+    vertex_location: str = "global"
+    vertex_model: str = "gemini-3.1-flash-lite"
+    gcs_bucket: str = "cv-applier-local"
+    storage_emulator_host: str = ""
+    max_cv_bytes: int = 5 * 1024 * 1024
+    max_cv_text_chars: int = 100_000
 
     user_agent: str = "cv-applier/0.1 (+personal job search assistant)"
     source_request_delay: float = 1.0

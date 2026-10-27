@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .routers.auth import router as auth_router
+from .routers.profile import router as profile_router
+from .routers.sources import router as sources_router
 
 app = FastAPI(title="CV Applier")
 
@@ -15,6 +17,8 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(profile_router)
+app.include_router(sources_router)
 
 
 @app.get("/api/health")

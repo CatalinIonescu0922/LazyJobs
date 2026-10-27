@@ -39,12 +39,97 @@ export type Me = {
   avatar_url: string;
 };
 
+export type Profile = {
+  id: number;
+  cv_filename: string;
+  full_name: string;
+  headline: string;
+  summary: string;
+  titles: string[];
+  skills: string[];
+  years_experience: number;
+  country: string;
+  city: string;
+  salary_currency: string;
+  preferred_locations: string[];
+  remote_only: boolean;
+  min_salary: number;
+  extra_keywords: string[];
+  has_cv: boolean;
+};
+
+export type Source = {
+  id: number;
+  domain: string;
+  kind: string;
+  status: string;
+  reason: string;
+  extraction: string;
+  posting_count: number;
+  last_refreshed_at: string | null;
+};
+
 // A 401 means signed out, which is an answer, not a failure worth retrying.
 export const meQuery = queryOptions({
   queryKey: ["me"],
   queryFn: () => api<Me>("/api/auth/me"),
   retry: false,
 });
+
+export const profileQuery = queryOptions({
+  queryKey: ["profile"],
+  queryFn: () => api<Profile>("/api/profile"),
+  retry: false,
+});
+
+export const sourcesQuery = queryOptions({
+  queryKey: ["sources"],
+  queryFn: () => api<Source[]>("/api/sources"),
+  retry: false,
+});
+
+export function discoverSources(kind: string): Promise<{ created: number; proposed: number }> {
+  return api(`/api/sources/discover?kind=${encodeURIComponent(kind)}`, { method: "POST" });
+}
+
+export function addSource(domain: string): Promise<Source> {
+  return api<Source>("/api/sources", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain, kind: "board" }),
+  });
+}
+
+export function updateSource(id: number, enabled: boolean): Promise<Source> {
+  return api<Source>(`/api/sources/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export function refreshSource(id: number): Promise<{ added: number; failed: number; status: string }> {
+  return api(`/api/sources/${id}/refresh`, { method: "POST" });
+}
+
+export type ProfileUpdate = Omit<
+  Profile,
+  "id" | "cv_filename" | "has_cv"
+>;
+
+export function updateProfile(update: ProfileUpdate): Promise<Profile> {
+  return api<Profile>("/api/profile", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+}
+
+export function uploadCv(file: File): Promise<Profile> {
+  const body = new FormData();
+  body.append("file", file);
+  return api<Profile>("/api/profile/cv", { method: "POST", body });
+}
 
 export function logout(): Promise<void> {
   return api<void>("/api/auth/logout", { method: "POST" });
