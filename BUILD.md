@@ -48,7 +48,9 @@ credential inside it. Phase 4 creates that project. Once it exists:
 
 Phases 1 to 3 were built before the project existed, against a hand-made OAuth client.
 If that client lives in some other project, recreate it inside the phase 4 project so
-everything bills and audits in one place.
+everything bills and audits in one place. Phase 6 is the first phase that needs steps 1 to
+5 finished, because it is the first time a login runs in a browser; an empty
+`GOOGLE_CLIENT_ID` was fine until then.
 
 There is no separate LLM key. Vertex AI authenticates with the same Google credentials as
 everything else, set up in phase 4.
@@ -83,29 +85,31 @@ flowchart TD
   S2 --> S3[Phase 3 Google auth]
   S3 --> S4[Phase 4 GCP guardrails]
   S4 --> S5[Phase 5 Local cloud parity]
-  S5 --> S6[Phase 6 CV and profile]
-  S5 --> S7[Phase 7 eJobs source]
-  S7 --> S8[Phase 8 ATS source]
-  S6 --> S9[Phase 9 Matching]
-  S7 --> S9
-  S8 --> S9
-  S9 --> S10[Phase 10 Applications API]
-  S10 --> S11[Phase 11 Cover letters]
+  S5 --> S6[Phase 6 Frontend shell and sign-in]
+  S6 --> S7[Phase 7 CV and profile]
+  S7 --> S8[Phase 8 Job sources and crawler]
+  S8 --> S9[Phase 9 LLM extraction tier and coverage]
+  S7 --> S10[Phase 10 Matching]
+  S9 --> S10
+  S10 --> S11[Phase 11 Applications, letters, tracker]
   S11 --> S12[Phase 12 Data plane]
   S12 --> S13[Phase 13 First deploy]
   S13 --> S14[Phase 14 Scheduled refresh]
   S13 --> S15[Phase 15 Deploy on push]
-  S13 --> S16[Phase 16 Frontend shell]
-  S6 --> S17[Phase 17 Profile screen]
-  S9 --> S18[Phase 18 Matches screen]
-  S10 --> S19[Phase 19 Tracker screen]
-  S11 --> S19
-  S19 --> S20[Phase 20 Polish]
-  S15 --> S21[Phase 21 Observability]
+  S13 --> S16[Phase 16 Serve the UI from the image]
+  S16 --> S17[Phase 17 Polish]
+  S15 --> S18[Phase 18 Observability]
+  S9 --> S19[Phase 19 Browser rendering]
+  S9 --> S20[Phase 20 Employers and ATS feeds]
 ```
 
-Phases 7 and 8 do not depend on auth, so the job pipeline can be proven early and
-independently if you would rather see results before building screens.
+Phases 19 and 20 block nothing. They need only the crawler from phases 8 and 9, so they
+can be done any time after phase 9. The coverage table from that phase says which is
+worth doing first, and whether phase 19 has a real board to test against at all.
+
+Every feature phase from 6 to 11 ships its screen together with its API, so each ends with
+something to click. Phase 8 needs the profile's country for board discovery, which is why
+it follows phase 7.
 
 Nothing is deployed until phase 13, and nothing costs money until phase 12. That ordering
 is deliberate: the whole application is proven against the compose stack from phase 5
@@ -113,7 +117,7 @@ first, so the credit is spent on a system that already works.
 
 ---
 
-# Part 1 - Backend, running locally
+# Part 1 - Backend and frontend, running locally
 
 ## Phase 1. Application skeleton
 
@@ -534,13 +538,49 @@ Effort: 3 hours.
 
 ---
 
-## Phase 6. CV upload and profile
+## Phase 6. Frontend shell and sign-in
 
-**Goal** - upload a real CV and get an editable structured profile.
+**Goal** - a browser UI you can sign in through, so every later phase is checked by
+clicking and not only through `/docs` and `curl`.
 
-**Files** - `backend/app/cv.py`, `backend/app/storage.py`, `backend/app/llm.py`
-(extraction only), `backend/app/routers/profile.py`, `backend/app/schemas.py`,
-edit `backend/requirements.txt` (add `google-cloud-storage`, drop `openai`).
+**Files** - Vite scaffold in `frontend/`, `src/api.ts`, `src/pages/SignIn.tsx`,
+`src/pages/Home.tsx`, a router with a protected-route wrapper, `docs/frontend.md`.
+
+Details: Vite with React, TypeScript, Tailwind, TanStack Query and React Router, with a
+proxy for `/api` to port 8000 so cookies are same-origin in development. `api.ts` is a thin
+`fetch` wrapper with `credentials: "include"` that redirects to sign-in on a 401. The
+sign-in page is one button linking to `/api/auth/google/login`. `Home` shows the signed-in
+name and avatar from `GET /api/auth/me` with a sign-out button, and is the navigation frame
+that each later phase adds a page to.
+
+The frontend runs on the host with `npm run dev`, next to the compose stack, and is not a
+fourth compose service. It needs hot reload and nothing else; phase 16 builds it into the
+production image.
+
+This is the first time a real Google login runs end to end. Phases 3 and 5 only exercised
+the pieces, because `GOOGLE_CLIENT_ID` has never been set. Do the OAuth client steps from
+Prerequisites before this phase, not during it.
+
+**Verify** - `docker compose up`, `npm run dev`, open `http://localhost:5173`, click
+Continue with Google, and land on Home showing your own name.
+
+**Done when** - a reload keeps you signed in, sign-out returns you to the sign-in page, and
+visiting a protected page while signed out redirects to sign-in.
+
+Effort: 2 hours.
+
+---
+
+## Phase 7. CV upload and profile
+
+**Goal** - upload a real CV in the browser and get an editable structured profile.
+
+**Files** - backend: `backend/app/cv.py`, `backend/app/storage.py`, `backend/app/llm.py`
+(profile extraction), `backend/app/routers/profile.py`, `backend/app/schemas.py`, an Alembic
+revision adding `profiles.country`, `profiles.city` and `profiles.salary_currency`, edit `backend/requirements.txt` (add
+`google-cloud-storage`, drop `openai`), edit `backend/app/config.py` and
+`backend/.env.example` to drop the OpenAI settings. Frontend: `src/pages/Profile.tsx`, an
+upload component and a preferences form. Docs: `docs/profile.md`, and start `docs/llm.md`.
 
 Details: `cv.py` dispatches on file extension, `pdfplumber` for PDF and `python-docx` for
 DOCX, returning plain text; reject anything else with a 400. `storage.py` writes the
@@ -548,7 +588,9 @@ uploaded file to the bucket in `GCS_BUCKET` with the `google-cloud-storage` clie
 locally that client talks to the emulator because `STORAGE_EMULATOR_HOST` is set, and in
 production the variable is unset and the same code reaches Cloud Storage. `llm.py` sends
 the text with a JSON-schema-shaped prompt to Vertex AI and parses the response into
-profile fields:
+profile fields, including `country` as an ISO alpha-2 code and `city`, both read from the
+address on the CV (empty when there is none). Phase 8 uses the country to decide which job
+boards to look for, and phase 20 uses the city to find employers:
 
 ```python
 from google import genai
@@ -562,139 +604,261 @@ own ADC locally, the attached service account in production - so "no key configu
 not a state this app can be in, and a fallback path nobody exercises is a liability.
 
 `PATCH /api/profile` accepts corrections to every extracted field plus the search
-preferences.
+preferences. `country` must match `^[A-Z]{2}$`. `min_salary` is a monthly amount in
+`salary_currency`, an ISO 4217 code, and the salary filter in phase 10 stays off while the
+currency is empty.
 
 Guard rails worth having: cap upload size at about 5 MB, and truncate CV text before the
 model call so a 40 page CV cannot blow the context window.
 
-**Verify** - upload your own CV in both formats through `/docs`, then `GET /api/profile`,
-then confirm the object landed:
+The Profile screen: a drag-and-drop area or file picker limited to `.pdf` and `.docx`, a
+parsing spinner (the model call takes a few seconds), then editable chips for skills and
+titles, a country select, a city input, and plain inputs for the preferences, with a currency select
+beside the minimum salary. The country select is built from the browser's
+`Intl.DisplayNames` and the currency select from `Intl.supportedValuesOf("currency")`, so
+there is no list to maintain. Save issues the `PATCH`.
+
+**Verify** - in the browser, upload your own CV as a PDF and again as a DOCX, and read what
+comes back. Fix a wrong skill, save, and reload. Then confirm the object landed:
 `curl http://localhost:4443/storage/v1/b/$GCS_BUCKET/o`
 
-**Done when** - skills and titles come back recognisably correct, a `PATCH` sticks, and
-the uploaded file is listed in the emulator bucket.
+**Done when** - skills, titles and country come back recognisably correct, a correction
+survives a reload, and the uploaded file is listed in the emulator bucket.
 
-Effort: 2.5 hours.
-
----
-
-## Phase 7. eJobs source
-
-**Goal** - real Romanian postings in the database.
-
-**Files** - `backend/app/sources/base.py`, `backend/app/sources/ejobs.py`,
-`backend/app/sources/registry.py`, `backend/app/routers/jobs.py`.
-
-Details: `base.py` carries the `Posting` dataclass and `JobSource` protocol from
-[PLAN.md](PLAN.md) section 7. `ejobs.py` does discovery from the category sitemaps plus
-`rss-listings.xml`, filters to URLs not already in `jobs`, then fetches each detail page
-and extracts the `JobPosting` node from the JSON-LD `@graph`. One second between requests,
-identifying User-Agent, and a hard cap on pages per run so a first run cannot spider the
-whole site.
-
-Romanian remote detection: check `jobLocationType` first, then look for "remote",
-"de acasa", "telemunca" and "hibrid" in the title and description, on diacritic-normalised
-text.
-
-`POST /api/jobs/refresh` runs the enabled sources and upserts on `(source, external_id)`.
-
-**Verify** - `POST /api/jobs/refresh`, then
-`docker compose exec db psql -U cv -d cv_applier -c "select company, title, locations from jobs limit 10"`
-
-**Done when** - ten real listings with populated company, location and description.
-
-Effort: 3 hours. This is the phase most likely to need iteration on parsing.
+Effort: 5.5 hours.
 
 ---
 
-## Phase 8. ATS source and coverage check
+## Phase 8. Job sources and the generic crawler
 
-**Goal** - ATS boards wired in, and an honest answer on whether they help for Romania.
+**Goal** - real postings from job boards found for your country, read by one crawler with no
+per-site code, and a screen that shows what it found.
 
-**Files** - `backend/app/sources/ats.py`, `backend/app/sources/companies.py`.
+**Files** - backend: `backend/app/sources/posting.py`, `fetch.py`, `discover.py`,
+`extract.py` (the JSON-LD tier only), `crawl.py`, `backend/app/textnorm.py`, extend
+`backend/app/llm.py`, `backend/app/routers/sources.py`, `backend/app/schemas.py`, an
+Alembic revision, edit `backend/requirements.txt` (add `beautifulsoup4` and `pycountry`),
+and unit tests for `fetch.py`, `extract.py` and `textnorm.py`. Frontend:
+`src/pages/Sources.tsx`. Docs: `docs/sources.md`.
 
-Details: one fetcher with three response mappings.
+The design is in [PLAN.md](PLAN.md) section 7, including the validation steps and the rules
+the crawler never breaks. What each module owns:
 
-- Greenhouse: `boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true`
-- Lever: `api.lever.co/v0/postings/{slug}?mode=json`
-- Ashby: `api.ashbyhq.com/posting-api/job-board/{slug}`
+- `posting.py` - the `Posting` dataclass.
+- `fetch.py` - the one HTTP client everything uses: `robots.txt` read per host, one
+  request per second per host, the address guard applied to every request and every
+  redirect hop, `https` only, size limits, an identifying User-Agent. Redirects are
+  followed by hand so each hop is checked against the address guard and the `robots.txt`
+  of its own host, and a hop to any host other than the source's own or its `www.`
+  counterpart is refused.
+- `discover.py` - `propose` (the discovery prompt for the profile's country) and
+  `validate` (the five steps in section 7).
+- `extract.py` - find the `JobPosting` node leniently, map it to a `Posting`, strip
+  descriptions to plain text, normalise country names to ISO alpha-2 with `pycountry`,
+  turn `baseSalary` into a monthly range from its `unitText`, and detect remote.
+- `textnorm.py` - one `normalise` function (lowercase, strip diacritics and punctuation,
+  drop legal suffixes such as `SRL`, `SA`, `Ltd` and `GmbH`) and `fingerprint(company,
+  title, city)` built on it. Phase 10 reuses `normalise` for hidden companies and matching.
+- `crawl.py` - `refresh_source`: read the chosen sitemaps, order newest first, drop URLs
+  already in `jobs`, take up to 100, extract, upsert on `(source, external_id)` with the
+  fingerprint, setting `first_seen_at` on insert only.
+- `llm.py` gains `propose_job_boards(country)` and `pick_posting_sitemaps(samples)`.
 
-`companies.py` is a plain list of `(provider, slug)` pairs. Seed it with known-good slugs
-(`stripe`, `databricks`, `gitlab`, `figma`, `coinbase` on Greenhouse) plus any Romanian
-employers found while building.
+The Alembic revision creates `job_sources`, widens `jobs.source` to 255 and
+`jobs.external_id` to 1024, and adds to `jobs`: `eligible_countries`, `expires_at`,
+`salary_min`, `salary_max`, `salary_currency`, `fingerprint` (indexed) and `first_seen_at`.
 
-Before going further, count how many fetched roles are Romania-eligible, meaning located
-in Romania or genuinely remote-EU. Write the number in this file. If it is negligible,
-mark ATS as secondary and move BestJobs into scope from the later-phase list in
-[PLAN.md](PLAN.md) section 16.
+Three pieces have sharp edges and are worth unit tests, built from saved real pages and
+not from invented ones. The address guard must refuse loopback, private and link-local
+addresses, `169.254.169.254` in particular, and an `https` redirect that lands on one.
+The JSON-LD mapper must read a posting wrapped in `@graph`, one with raw control characters
+inside strings (We Work Remotely has them), one with `applicantLocationRequirements`, and
+one with a yearly and one with an hourly `baseSalary`. The fingerprint must give the same
+value for one job on two boards and for a title with and without a "(m/f)" marker, and a
+different value for the same title in another city. Everything else is verified against
+live boards.
 
-**Verify** - `POST /api/jobs/refresh`, then group by source and count Romania-eligible rows.
+The Job boards screen: a table of boards with kind, status and its reason in plain words,
+extraction tier, posting count and last refresh; a "Find boards for `<country>`" button; an
+add-a-domain input; an on and off switch; and a Refresh button per row, plus "Refresh all",
+which runs the rows one after another and shows which one is running.
 
-**Done when** - the count exists and the decision is recorded.
+**Verify** - with a country set on the profile, open Job boards and click Find boards.
+About twenty candidates appear. Refresh them one by one. Expect eJobs, HiPo, Remotive,
+RemoteOK and We Work Remotely to become `active` on the `jsonld` tier, and the boards that
+refused the earlier probe, Indeed and Jooble among them, to end `failed` with a reason in
+plain words. LinkedIn is the one to watch: its bare domain answers differently from `www`,
+so it tests the per-host `robots.txt` rule, and it must not end `active`. Then
+`docker compose exec db psql -U cv -d cv_applier -c "select source, count(*) from jobs group by source"`
+and `... -c "select company, title, locations, eligible_countries from jobs limit 10"`
+and, for duplicates,
+`... -c "select fingerprint, count(*), array_agg(distinct source) from jobs group by fingerprint having count(*) > 1 limit 10"`
 
-Effort: 2 hours including the measurement.
+**Done when** - ten real listings with company, location and description from at least
+three different boards, a remote posting carrying its `eligible_countries`, every row
+carrying a fingerprint and a `first_seen_at`, a failed board showing why, and the unit
+tests pass.
+
+Effort: 6.5 hours. This is the phase most likely to need iteration, and the iteration is on
+the validation step, not on parsing.
 
 ---
 
-## Phase 9. Matching
+## Phase 9. LLM extraction tier and coverage check
 
-**Goal** - ranked matches with a readable reason.
+**Goal** - boards with no structured data become readable too, and there is an honest
+number for how much of your market the crawler reaches.
 
-**Files** - `backend/app/matching.py`, extend `backend/app/routers/jobs.py`.
+**Files** - extend `backend/app/sources/extract.py`, extend `backend/app/llm.py`, edit
+`backend/app/sources/crawl.py` and `discover.py`, extend `src/pages/Sources.tsx`, extend
+`docs/sources.md`.
 
-Details: normalise text (lowercase, strip diacritics), apply the hard filters, then score
-title overlap, skills overlap and recency into 0 to 100. Build the reason string from the
-actual matched skills. Keep the small Romanian/English synonym map beside the scorer.
+Details: the second extraction tier from [PLAN.md](PLAN.md) section 7. `extract.py` reduces
+a page to its visible text plus any embedded JSON payload (BestJobs keeps the posting in
+`__NEXT_DATA__`), truncates it, and `llm.py`'s `extract_posting(page_text)` asks Vertex AI
+for the `Posting` fields, with the salary as a monthly range when the page states one and
+`null` as the answer when the page is not a single posting.
+Validation falls through to this tier when the JSON-LD tier fails on its three sample pages.
+The cap for this tier is 30 pages per run, because each page costs about a tenth of a cent.
 
-This is pure functions over plain data, so it is the one part worth unit testing: a
-handful of fabricated postings asserting order and filter behaviour.
+The Sources screen now shows, per board, which tier it runs on and how many postings the
+last run added, skipped and failed.
 
-**Verify** - `GET /api/matches` after phases 6 and 7
+Then the measurement. For every board discovered for your country, record how many
+postings it produced and by which tier, which boards failed and why, and how many postings
+in total are open to you: located in your country, or remote with `eligible_countries` empty
+or containing it. Write the table in this file under this phase. The table decides what
+comes next. Boards that failed with `needs a browser` point to phase 19, a thin share of
+postings at the companies you care about points to phase 20, and neither is a reason to
+write site-specific scrapers.
 
-**Done when** - the top results are plausibly yours, and every result carries a reason.
+**Verify** - refresh BestJobs from the Job boards screen and confirm it validates on the
+`llm` tier and its postings land in `jobs`. Then
+`docker compose exec db psql -U cv -d cv_applier -c "select source, count(*), count(*) filter (where remote) as remote from jobs group by source order by 2 desc"`
 
-Effort: 2 hours.
+**Done when** - at least one board with no JSON-LD yields postings through the LLM tier,
+the coverage table is written in this file, and the decision it implies is recorded.
+
+Effort: 2.5 hours including the measurement.
 
 ---
 
-## Phase 10. Applications API
+## Phase 10. Matching and the Matches screen
 
-**Goal** - the review queue as data.
+**Goal** - ranked matches with a readable reason, shown as cards.
 
-**Files** - `backend/app/routers/applications.py`.
+**Files** - backend: `backend/app/matching.py`, `backend/app/routers/matches.py`,
+`backend/app/schemas.py`, an Alembic revision adding `profiles.hidden_companies` and
+`profiles.keyword_query`, and extend `backend/app/routers/profile.py` to accept both.
+Frontend: `src/pages/Matches.tsx`, a match card component, and a hidden-companies list on
+`src/pages/Profile.tsx`. Docs: `docs/matching.md`.
 
-Details: create from a match (guarding the `(user, job)` uniqueness), list filtered by
-status, patch status, notes and letter. Validate status transitions against the lifecycle
-in [PLAN.md](PLAN.md) section 5 and stamp `submitted_at` when entering `submitted`.
+Details: normalise text with `textnorm.normalise`, apply the hard filters, collapse
+duplicates, then score title overlap, skills overlap, recency and a seniority check into 0
+to 100. The rules are in [PLAN.md](PLAN.md) section 9. In short:
 
-**Verify** - create, patch through to `submitted`, list by status
+- The location filter treats a remote posting as a match only when `eligible_countries` is
+  empty or contains the profile's country, which keeps a "remote, US only" role out of a
+  Romanian user's list.
+- A company in `hidden_companies` is dropped. Names are stored through `normalise`, so
+  hiding "ERPA PREMIUM VISION S.R.L." also hides the same company on another board.
+- A salary filter applies only when the profile has a `salary_currency`, the posting
+  states a salary in that currency, and its top figure is below your minimum. Anything
+  else passes.
+- The keyword query is a hard filter. Words, quoted phrases, `AND`, `OR`, `NOT` and
+  parentheses, with adjacent words meaning `AND`. It runs on the normalised title and
+  description, and a one-letter token such as `R` matches only as its own word. An empty
+  query matches everything. `GET /api/matches?q=` overrides the saved query for that
+  request.
+- Postings sharing a `fingerprint` become one match: the live posting, the other places it
+  is on, and a repost count from the distinct URLs on the same board. Within one
+  normalised company, a description with a high word overlap against an older posting
+  joins that group as well. Pick the threshold in this phase by comparing a few real
+  reposts with a few genuine different jobs, and record the number in `docs/matching.md`.
+  An employer's own feed (phase 20) is preferred over a board, so the apply link goes
+  straight to the company.
+- Recency, and the "newer than" filter, count from the earliest of the group's `posted_at`
+  and `first_seen_at`.
+- The seniority check reads a level from the title with a small Romanian and English word
+  list, kept beside the synonym map, and subtracts points for a gap of two levels or more
+  against `years_experience`. No level word means no penalty.
+- The reason string is built from the matched skills, with age and reposts appended when
+  they matter.
 
-**Done when** - an invalid transition is rejected and `submitted_at` is set exactly once.
+This is pure functions over plain data, so it is worth unit testing: a handful of
+fabricated postings asserting order and filter behaviour. Cover a remote posting
+restricted to another country being filtered out, an expired posting being dropped, a
+hidden company being dropped, a known-too-low salary being dropped while an unstated one
+passes, two postings with one fingerprint collapsing into one match that lists both
+boards, two postings at one company with different titles and a near-copy description
+collapsing and keeping the earlier date, `pandas OR r` keeping a description that contains
+`R` as a word and dropping one that only contains `recruiting`, and a "senior" title
+ranking below a "junior" one for a candidate with one year of experience.
 
-Effort: 1 hour.
+The Matches screen: ranked cards with score, reason, company, location, the boards the job
+appears on, and a link to the original posting; a keyword box for the boolean query; filter
+controls for remote only, minimum score and "newer than" (default 30 days, measured from
+the earliest date in the duplicate group, which is how a reposted old job drops out); and a
+"hide this company" action on each card that appends to `hidden_companies` through
+`PATCH /api/profile`. The keyword box saves back to `keyword_query` on the profile. The
+Profile screen lists hidden companies with a control to unhide one, so the choice is
+reversible. The save and dismiss actions on each card arrive with the Applications API in
+phase 11.
+
+**Verify** - open Matches with the profile from phase 7 and the postings from phases 8 and
+9, and read the top ten against your own sense of what fits. `GET /api/matches` returns the
+same list. Hide a company, confirm its cards vanish and then reappear after unhiding it on
+the Profile screen. Find a job that appears on two boards and confirm it shows once with
+both boards listed.
+
+**Done when** - the top results are plausibly yours, every result carries a reason, no
+remote posting closed to your country appears, a job on several boards shows once, a
+reworded repost counts from its earlier date, a boolean query narrows the list, a hidden
+company stays hidden across a reload, and the unit tests pass.
+
+Effort: 8 hours.
 
 ---
 
-## Phase 11. Cover letters
+## Phase 11. Applications, cover letters and the Tracker
 
-**Goal** - a draft worth editing rather than rewriting.
+**Goal** - the review queue as data, a cover letter draft worth editing rather than
+rewriting, and a screen to take one job from match to submitted.
 
-**Files** - extend `backend/app/llm.py`, extend the applications router.
+**Files** - backend: `backend/app/routers/applications.py`, extend `backend/app/llm.py`,
+`backend/app/schemas.py`. Frontend: `src/pages/Applications.tsx`, a status badge, a letter
+editor drawer, and the save and dismiss actions on the match card from phase 10. Docs:
+extend `docs/llm.md`.
 
-Details: `draft_cover_letter(profile, job)` gets the profile summary, the matched skills
-and the job description, and is told to write in the language of the posting, which
-matters on eJobs where half the listings are Romanian. Store on the application and move
-status to `drafted`.
+Details, applications: create from a match (guarding the `(user, job)` uniqueness), list
+filtered by status, patch status, notes and letter. Validate status transitions against the
+lifecycle in [PLAN.md](PLAN.md) section 5 and stamp `submitted_at` when entering
+`submitted`.
 
-The call goes to Vertex AI through the same `genai.Client` built in phase 6, with the
-same `gemini-3.1-flash-lite` model, so there is one client and one set of credentials in
-the codebase. A letter costs about $0.005.
+Details, letters: `draft_cover_letter(profile, job)` gets the profile summary, the matched
+skills and the job description, and is told to write in the language of the posting, which
+matters on Romanian boards where many listings are in Romanian. Store on the application
+and move status to `drafted`. The call goes to Vertex AI through the same `genai.Client`
+built in phase 7, with the same `gemini-3.1-flash-lite` model, so there is one client and
+one set of credentials in the codebase. A letter costs about $0.005.
 
-**Verify** - draft a letter for a real eJobs match and read it
+The Tracker screen: a table grouped by status with counts, a drawer to read and edit the
+cover letter with a copy button, a notes field, and the status control. The apply link and
+the "I submitted this" confirmation sit next to each other, since that pairing is the
+actual workflow.
 
-**Done when** - the letter names the company and role and reads like your CV, not a template.
+Build the API first and check it through `/docs`, then the screen. They are separable once
+the response shapes are fixed in `schemas.py`.
 
-Effort: 1 hour.
+**Verify** - in the browser, save one match, draft its letter and read it, edit it, then
+move the application through to `submitted` and later to `interview`. Try an invalid
+transition, such as `matched` straight to `interview`, and confirm it is refused.
+
+**Done when** - an invalid transition is rejected, `submitted_at` is set exactly once, the
+letter names the company and role and reads like your CV and not a template, and you can
+take one job from match to submitted without leaving the browser.
+
+Effort: 5 hours.
 
 ---
 
@@ -737,7 +901,7 @@ resource "google_sql_database" "app" {
 
 `deletion_protection = false` is a deliberate choice, not an oversight. The provider
 defaults this to `true`, which is the right instinct for a database with real users and
-the wrong one here, where phase 21's whole teardown checklist depends on
+the wrong one here, where phase 18's whole teardown checklist depends on
 `terraform destroy` being able to actually remove this instance before the credit runs
 out. The instance keeps its default address with an empty authorized-network list, so
 nothing on the internet can open a connection to it; access goes exclusively through the
@@ -1064,9 +1228,10 @@ its trigger both declared in Terraform.
 
 **Files** - `backend/app/refresh.py`, extend `infra/main/main.tf`, extend `docs/cloud.md`.
 
-`refresh.py` is a module entrypoint that calls the same source-registry code the
-`POST /api/jobs/refresh` route calls, then exits. It runs as a Cloud Run job sharing the
-image built in phase 13, with a different command.
+`refresh.py` is a module entrypoint that loops the same `refresh_source` function the
+`POST /api/sources/{id}/refresh` route calls over every `active` source, then exits.
+Sources that are `candidate`, `disabled` or `failed` are skipped. It runs as a Cloud Run job
+sharing the image built in phase 13, with a different command.
 
 This is a job rather than a route on the public service for three reasons. The refresh
 takes minutes and Cloud Run requests have a request timeout and are billed for their whole
@@ -1308,20 +1473,22 @@ first time.
 
 ---
 
-# Part 3 - Frontend
+# Part 3 - Shipping the frontend
 
-## Phase 16. Shell and sign-in
+The screens already exist, built alongside their APIs in phases 6 to 11 and run locally
+through the Vite dev server. What is left is packaging them for the deployed image.
 
-**Files** - Vite scaffold in `frontend/`, `src/api.ts`, `src/pages/SignIn.tsx`,
-router with a protected-route wrapper, edit `backend/Dockerfile`.
+## Phase 16. Serve the UI from the image
 
-Details: Vite proxy for `/api` to port 8000 so cookies are same-origin in development.
-`api.ts` is a thin `fetch` wrapper with `credentials: "include"` that redirects to sign-in
-on a 401. The sign-in page is one button linking to `/api/auth/google/login`.
+**Goal** - the deployed service serves the built UI, so the live URL is the app and not
+just an API.
 
-This phase also turns `backend/Dockerfile` into a multi-stage build. The first stage runs
-`npm ci && npm run build` on `frontend/`, and the final Python stage copies the compiled
-assets in and serves them from the backend:
+**Files** - edit `backend/Dockerfile`, `backend/app/main.py`, `docker-compose.yml`,
+`cloudbuild.yaml`, extend `docs/frontend.md`.
+
+Details: this phase turns `backend/Dockerfile` into a multi-stage build. The first stage
+runs `npm ci && npm run build` on `frontend/`, and the final Python stage copies the
+compiled assets in and serves them from the backend:
 
 ```dockerfile
 FROM node:20-slim AS frontend
@@ -1342,8 +1509,13 @@ CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} \
     --proxy-headers --forwarded-allow-ips="*"
 ```
 
-The build context becomes the repository root, so the `docker build` and `cloudbuild.yaml`
-paths from phases 13 and 15 change from `backend` to `.` accordingly.
+The build context becomes the repository root, so `docker-compose.yml` changes to
+`build: { context: ., dockerfile: backend/Dockerfile }` and the `docker build` and
+`cloudbuild.yaml` paths from phases 13 and 15 change from `backend` to `.` accordingly.
+
+FastAPI serves the `static/` directory and falls back to `index.html` for any path that is
+not under `/api`. Without the fallback, a reload on `/matches` is a 404, because React
+Router owns that route and the server has never heard of it.
 
 One image serving both halves makes production single-origin: the API and the UI share a
 scheme and host, so there is no CORS preflight to configure and the session cookie is
@@ -1351,62 +1523,19 @@ first-party rather than a third-party cookie that browsers are steadily restrict
 Development keeps the Vite proxy, which produces the same single-origin effect through a
 different mechanism.
 
-**Verify** - `npm run dev`, click through Google, land back in the app authenticated.
+**Verify** - `docker compose up --build`, then open `http://localhost:8000/`, sign in, and
+reload on `/matches` to prove the fallback. After the next deploy,
+`curl -s $SERVICE_URL/ | head -5` returns the built `index.html`.
 
-**Done when** - a reload keeps you signed in and logout clears it, and the deployed image
-serves the built UI at `$SERVICE_URL/`.
+**Done when** - the compose image serves the built UI at `http://localhost:8000/` with
+every screen working and a reload on a deep link intact, and the deployed image serves it
+at `$SERVICE_URL/`.
 
-Effort: 3 hours including Tailwind, TanStack Query and the multi-stage build.
-
----
-
-## Phase 17. Profile screen
-
-**Files** - `src/pages/Profile.tsx`, upload component, preferences form.
-
-Details: drag-and-drop or file picker limited to `.pdf` and `.docx`, a parsing spinner
-(the model call takes a few seconds), then editable chips for skills and titles and plain
-inputs for the preferences. Save issues the `PATCH`.
-
-**Done when** - you can fix a wrongly extracted skill and see it persist across reload.
-
-Effort: 3 hours.
+Effort: 1 hour.
 
 ---
 
-## Phase 18. Matches screen
-
-**Files** - `src/pages/Matches.tsx`, match card component.
-
-Details: a "Refresh jobs" button that calls the refresh endpoint and shows progress, then
-ranked cards with score, reason, company, location, posted date, a link to the original
-posting, and two actions: save to applications, or dismiss. Filter controls for remote
-only and minimum score.
-
-**Done when** - refreshing brings in new eJobs listings and saving one creates a row in
-the tracker.
-
-Effort: 3 hours.
-
----
-
-## Phase 19. Tracker screen
-
-**Files** - `src/pages/Applications.tsx`, status badge, letter editor drawer.
-
-Details: table grouped by status with counts, a drawer to read and edit the cover letter
-with a copy button, a notes field, and the status control. The apply link and the
-"I submitted this" confirmation sit next to each other, since that pairing is the actual
-workflow.
-
-**Done when** - you can take one job from match to submitted and later mark it as an
-interview.
-
-Effort: 3 hours.
-
----
-
-## Phase 20. Polish
+## Phase 17. Polish
 
 **Files** - across both apps, plus `README.md`.
 
@@ -1421,7 +1550,7 @@ Effort: 2 hours.
 
 # Part 4 - Operating it
 
-## Phase 21. Observability and cost hygiene
+## Phase 18. Observability and cost hygiene
 
 **Goal** - see what the deployed app is doing, see what it costs, and know how to switch
 it all off.
@@ -1466,6 +1595,7 @@ phase 4 budget is still attached with `gcloud billing budgets list --billing-acc
 | Cloud Storage | under $0.10 a month | The 5 GB free tier is US-only, so `europe-west3` bills from the first byte at about $0.02 per GB-month. |
 | Terraform state bucket | under $0.01 a month | A handful of small JSON files, billed the same as the uploads bucket. |
 | Vertex AI, `gemini-3.1-flash-lite` | about $0.005 per cover letter | $0.25 per million input tokens, $1.50 per million output tokens. |
+| Vertex AI, board discovery and extraction | under $0.001 per discovery call, about $0.001 per board validated, about $0.001 per page on a board that needs the LLM tier | Same prices. The one cost that grows with the number of boards: a board on the LLM tier at its cap of 30 pages a run is at most about $0.04 a night, so about $1 a month. Boards with JSON-LD cost nothing. |
 | Artifact Registry | $0 | 0.5 GB free. A slim image is around 200 MB, so keep at most two tags. |
 | Secret Manager | $0 | 6 active secret versions and 10,000 access operations free per month. |
 | Cloud Build | $0 | 2,500 build-minutes free per month. |
@@ -1473,7 +1603,7 @@ phase 4 budget is still attached with `gcloud billing budgets list --billing-acc
 | Cloud Logging | $0 | First 50 GiB per project per month. |
 
 Roughly $12 a month, so about $36 across the 90-day credit window, leaving the large
-majority of the $300 unspent.
+majority of the $300 unspent. A few boards on the LLM tier add a few dollars at most.
 
 ### Teardown checklist
 
@@ -1523,6 +1653,146 @@ Effort: 2 hours.
 
 ---
 
+# Part 5 - Extending reach
+
+Both phases extend the crawler from phases 8 and 9 and block nothing. Start from the
+coverage table in phase 9: it shows which boards failed and why, and so which of these two
+phases has something real to work on.
+
+## Phase 19. Browser rendering for JavaScript-heavy boards
+
+**Goal** - boards whose pages are empty until a script runs become readable, through
+Playwright, and then go through the same two extraction tiers as every other board.
+
+**Files** - `backend/app/sources/render.py`, edit `fetch.py` (share the address guard),
+`discover.py` (validation fallback) and `crawl.py`, an Alembic revision adding
+`job_sources.needs_render`, edit `backend/requirements.txt` (add `playwright`) and
+`backend/Dockerfile` (install Chromium), extend `src/pages/Sources.tsx` (show that a board
+renders in a browser), extend `docs/sources.md` and `docs/cloud.md`.
+
+Pick the target first. Take a board from the phase 9 coverage table that failed with `needs
+a browser` or `no postings found` and looks like a script-built page. If the table shows no
+such board, skip this phase: none of the twelve boards probed so far needed it, so there
+would be nothing to verify against.
+
+Details: `render.py` exposes `render(url) -> html`. It launches headless Chromium, opens the
+page with the same honest User-Agent, waits for the network to go quiet or a 15 second cap,
+and returns the DOM. The rules from [PLAN.md](PLAN.md) section 7 apply unchanged:
+
+- Every request the browser makes goes through `fetch.py`'s address guard, through
+  Playwright's request-routing hook, and is aborted if the address is private, loopback
+  or link-local. Images, fonts and media are blocked.
+- `robots.txt` is read first, as for any fetch. No stealth plugins, no proxies, and a 403
+  from the page is still a refusal.
+- One page at a time, a hard timeout per page, and a lower page cap than the plain
+  tiers because each page takes seconds.
+
+Validation gains a step: when a plain fetch returns an empty shell, meaning almost no
+visible text and no JSON-LD, retry through `render`. If tier 1 or tier 2 then yields
+postings, store `needs_render = true` on the source, and `crawl.py` renders its pages from
+then on.
+
+Decide where Chromium runs in this phase, from numbers, not before. It adds hundreds of
+megabytes to an image that the plan sizes at about 200 MB against Artifact Registry's 0.5 GB
+free tier, it needs more memory than the API service does, and it executes untrusted
+JavaScript. The options are one heavier image for everything or a heavier image for the
+refresh job only, and the choice goes in `docs/cloud.md` next to the measured size and
+memory.
+
+One unit test: a browser request to `169.254.169.254` is aborted by the routing hook.
+
+**Verify** - refresh the chosen board from the Job boards screen and confirm it validates
+with `needs_render` set and that its postings land in `jobs`.
+
+**Done when** - the board yields at least ten real postings, the test above passes, and
+the image size and memory figures are written down.
+
+Effort: 4 hours.
+
+---
+
+## Phase 20. Employers and their ATS feeds
+
+**Goal** - jobs straight from the public ATS feeds companies already publish, with the
+company's own apply link. A company comes from the model, from an apply link on a board
+posting, or from a URL you paste.
+
+Read [PLAN.md](PLAN.md) section 2, "Can employers' own job feeds be read?", and the
+employer section in 7 first. The numbers matter for expectations: in a test over the ten
+largest employers in each of three Romanian cities, about one in six had a feed we could
+read, and the banks, telecoms and retailers mostly sit on portals this phase does not
+cover. The phase adds depth at companies like Endava, Continental and Accenture, and it does
+not replace the boards.
+
+**Files** - backend: `backend/app/sources/employers.py` (find an employer's ATS and verify
+it), `backend/app/sources/ats.py` (one reader per provider), extend `backend/app/llm.py`
+with `propose_employers(city, country, titles)` and `classify_employer(name, blurb)`, edit
+`discover.py`, `crawl.py` and `matching.py`, edit
+`backend/app/routers/sources.py` (the `kind` parameter, and accepting an ATS URL), an
+Alembic revision adding the ATS columns to `job_sources` and `jobs.experience_level`, and
+unit tests. Frontend: extend `src/pages/Sources.tsx` with a "Find employers in `<city>`"
+button and accept an ATS URL in the add box. Docs: extend `docs/sources.md` and
+`docs/llm.md`.
+
+Details: the steps are in section 7.
+
+- `llm.py`'s `propose_employers` asks for the largest employers in the profile's city that
+  hire for the profile's titles, as `{company, website}`. A name and a domain, not a
+  careers URL: only 18 of the 30 URLs the model gave in the test were reachable.
+  Discovery refuses to run until the profile has a city.
+- `employers.py` finds the ATS for a named company. It fetches the home page and the usual
+  careers paths with `fetch.py`, looks for links to Greenhouse, Lever, Ashby,
+  SmartRecruiters, Workable, Recruitee and Workday and takes their identifiers, and falls
+  back to slugs derived from the company name. A script-shell page is rendered through
+  phase 19 if it exists. A source that already has a slug, from an apply link or a pasted
+  URL, skips that search. Then the ownership check: a feed that names its company must
+  match, and one that does not must contain a job in the candidate's country.
+- `ats.py` has one reader per provider, each mapping a feed to the `Posting` dataclass
+  with the employer's own `apply_url`. Greenhouse, Lever, Ashby, SmartRecruiters, Workable
+  and Recruitee use their documented public feeds. Workday uses the JSON endpoint its
+  careers site calls, `POST /wday/cxs/{tenant}/{site}/jobs`, which is undocumented and can
+  change. Read each provider's terms and check the live response shape when writing its
+  reader. Some feeds omit descriptions and need one more request per new posting, within the
+  cap of 100 per run.
+- `crawl.py` branches on `extraction = "ats"`. After a board posting is stored, an
+  `apply_url` on a known ATS host is parsed into a provider and a slug and stored as an
+  employer candidate. That URL is not fetched. These sources are refreshed like boards and
+  by the nightly job. The employer portion stops after 15 minutes and resumes the next
+  night at the sources least recently checked.
+- `llm.py` gains `classify_employer(name, blurb)`. It runs once when an employer source is
+  first stored. An agency is saved `disabled` with the reason `staffing agency`. A failed
+  call leaves the source a candidate and says the check did not run.
+- The SmartRecruiters reader passes the profile's country, and any feed that returns
+  locations drops out-of-country jobs before it fetches a description.
+- `experience_level` from a feed, when the feed has one, is stored and matching prefers it
+  to a level word in the title.
+
+Where the test found a feed, save a real response per provider as a unit-test fixture.
+Two tests are worth writing: each reader maps its saved response to the right `Posting`
+fields, and the ownership check rejects the Accenture-on-Recruitee case, a 2-job board that
+belongs to a different company and has nothing in the candidate's country.
+
+**Verify** - with a profile whose city is Cluj-Napoca or Timisoara, click "Find employers
+in `<city>`". Ten or so candidates appear. Refresh them one by one. Expect some to become
+`active` with their ATS shown, for example Endava on SmartRecruiters or Continental, and the
+rest to end `failed` with a reason such as `no supported ATS found`. Paste
+`https://jobs.smartrecruiters.com/endava` and confirm it skips the career-page search.
+Refresh a board that carries an ATS apply link and confirm a new employer candidate
+appears from that link alone. Then
+`docker compose exec db psql -U cv -d cv_applier -c "select source, count(*) from jobs group by source"`
+and confirm that a job found on both a board and its employer's feed shows once in Matches,
+with the employer's apply link. An agency, if one comes back, is `disabled` with the
+reason `staffing agency` and produces no matches until you switch it on.
+
+**Done when** - at least three employers in your city validate and yield postings, each
+posting has the company's own apply link, a pasted ATS URL and a harvested apply link both
+become employer sources, the ownership check rejects the false-match fixture, an agency
+comes back disabled, and a cross-source duplicate shows once with the direct link.
+
+Effort: 8 hours.
+
+---
+
 ## Documentation deliverables
 
 Each phase ships its doc in the same change as its code, per the docs rule. Written for an
@@ -1535,18 +1805,28 @@ exposes, and the constraints the code cannot show.
 - Phases 4 and 5: `docs/cloud.md` - the GCP project layout, the `infra/bootstrap` and
   `infra/main` Terraform modules and why they are split, what runs where, the local
   compose stack and how it mirrors production, the credentials model.
-- Phase 6: `docs/profile.md` - CV parsing path, the extraction contract, where the
-  uploaded file is stored.
-- Phases 6 and 11: `docs/llm.md` - the two Vertex AI prompts, the model choice, the
-  language rule, and why Vertex AI rather than AI Studio.
-- Phases 7 and 8: `docs/sources.md` - the `JobSource` contract, one section per adapter,
-  the politeness rules, and the Romania coverage finding from phase 8.
-- Phase 9: `docs/matching.md` - the scoring formula, the hard filters, the bilingual
+- Phase 6: `docs/frontend.md` - routing, the API wrapper, the auth redirect behaviour, the
+  dev proxy.
+- Phase 7: `docs/profile.md` - CV parsing path, the extraction contract, where the uploaded
+  file is stored.
+- Phases 7, 9 and 11: `docs/llm.md` - every Vertex AI prompt, the model choice, the
+  language rule for letters, the untrusted-input rule for page text, and why Vertex AI
+  rather than AI Studio.
+- Phases 8, 9, 19 and 20: `docs/sources.md` - how boards are discovered and validated, the
+  two extraction tiers, the rules the crawler never breaks, how the fingerprint is built and
+  why `first_seen_at` is never updated, the coverage finding from phase 9, how browser
+  rendering is guarded, and how an employer's ATS feed is found from a name, an apply link
+  or a pasted URL, how an agency is labelled once, and which providers are read.
+- Phase 10: `docs/matching.md` - the scoring formula, the hard filters including remote
+  eligibility, salary, the boolean keyword query and hidden companies, duplicate grouping
+  including the description-overlap threshold, the seniority check, and the bilingual
   normalisation.
 - Phases 12 to 15: extend `docs/cloud.md` - the deployment topology, the service account
   roles, and the deploy command.
-- Phase 16: `docs/frontend.md` - routing, the API wrapper, the auth redirect behaviour.
-- Phase 21: extend `docs/cloud.md` - the cost model and the teardown checklist.
+- Phase 16: extend `docs/frontend.md` - how the bundle is built into the image and served.
+- Phase 18: extend `docs/cloud.md` - the cost model and the teardown checklist.
+- Phase 19: extend `docs/cloud.md` - where Chromium runs, with the measured image size and
+  memory.
 
 ## Parallel work and subagents
 
@@ -1556,13 +1836,19 @@ points in this plan split cleanly:
 - Phase 4 is Terraform and CLI work that touches no application code, so it can run
   alongside phase 5 once the environment variable names are fixed. Contract to fix first:
   the `.env` block in the prerequisites.
-- Phases 7 and 8 are one workstream (job sources) that is independent of phases 3 and 6
-  (auth and profile). Contract to fix first: the `Posting` dataclass and `JobSource`
-  protocol in `backend/app/sources/base.py`.
-- Phases 17, 18 and 19 are three independent screens once the API exists. Contract to fix
-  first: the response shapes in `src/api.ts` and the shared components each screen may
-  use. Each subagent owns its own page file and nothing else.
-- Phase 20 polish is not parallelisable and stays with the lead.
+- The crawler core of phase 8, which is `fetch.py`, `extract.py` and their unit tests, is
+  pure code with no dependency on the profile, so it can be built alongside phase 7.
+  Contract to fix first: the `Posting` dataclass in `backend/app/sources/posting.py`.
+- Within each of phases 7, 8, 10 and 11, the API and its screen are separable once the
+  response shapes are fixed. Contract to fix first: the response models in
+  `backend/app/schemas.py` and the matching types in `frontend/src/api.ts`. Each subagent
+  owns its own files, one the router and modules, the other the page, and nothing else.
+- Phases 19 and 20 touch different modules (`render.py` against `employers.py` and
+  `ats.py`) and share only the `Posting` dataclass, so they can be built side by side.
+  Phase 20 can use phase 19's rendering when it exists and does not need it. They both edit
+  `crawl.py` and `Sources.tsx`, so the lead makes those two small edits itself.
+
+Phase 17 polish is not parallelisable and stays with the lead.
 
 Everything else is sequential because each phase consumes the previous one's output. The
 cloud phases in particular are strictly ordered: each one creates the resource the next
@@ -1570,12 +1856,13 @@ one refers to by name.
 
 ## Totals and sequencing
 
-Part 1 is roughly 18 hours, part 2 roughly 6, part 3 roughly 14, part 4 roughly 2, so
-about 40 hours in total.
+Part 1 is roughly 36 hours, part 2 roughly 6, part 3 roughly 3, part 4 roughly 2, part 5
+roughly 12, so about 59 hours in total.
 
-The first moment the project is genuinely useful is the end of phase 11, when you can get
-a ranked list and a drafted letter through `/docs` without any UI, and without a cloud
-bill. The first moment it is useful from a phone is the end of phase 13.
+The first moment the project is genuinely useful is the end of phase 11, when you can sign
+in, upload a CV, see ranked matches from boards found for your country and draft a letter,
+all in the browser and without a cloud bill. The first moment it is useful from a phone is
+the end of phase 16, when the deployed image serves the UI.
 
 Phases 4 and 5 look like a detour from the feature work, and they are what makes phases 12
 to 15 short: by the time anything is deployed, the container, the database engine and the
@@ -1583,7 +1870,11 @@ storage client have all already been proven locally.
 
 ## Deferred, with triggers
 
-- BestJobs adapter - when phase 8 shows ATS contributes little for Romania.
-- JSearch key - when you want LinkedIn and Indeed listings in the results.
-- Playwright auto-fill for ATS forms - after the tracker proves the workflow.
+- More ATS providers (SuccessFactors, Oracle Recruiting, Taleo, iCIMS) - when the coverage
+  table shows employers you care about on one of them. Each is one more small reader in
+  `ats.py`.
+- Description embeddings - when a paraphrased repost still appears as a new job after the
+  word-overlap check in phase 10. The fingerprint stays the blocking key.
+- Auto-filling ATS forms with Playwright - clicking and form filling, after the tracker
+  proves the workflow. Rendering pages is phase 19.
 - Cloud SQL backups and a second environment - when losing the data would actually matter.

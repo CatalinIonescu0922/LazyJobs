@@ -49,6 +49,7 @@ describe.
 
 - [Authentication](docs/auth.md)
 - [Cloud foundation](docs/cloud.md)
+- [How jobs are found and used](docs/how-it-works.md) (design, not built yet)
 - Design: [PLAN.md](PLAN.md)
 - Phase checklist: [BUILD.md](BUILD.md)
 - Live phase status: [PROGRESS.md](PROGRESS.md)

@@ -12,7 +12,11 @@ decision than one that pretends to be permanent: it records the context it depen
 when the context changes the decision can be retired deliberately instead of discovered as
 an outage. Entry 20 is the one decision here that has already expired.
 
-Phase numbers refer to the twenty-one phases in [BUILD.md](BUILD.md).
+Phase numbers in entries 1 to 26 refer to the twenty-one-phase numbering that existed
+before 2026-10-27. Entries 27 onward use the twenty phases now in [BUILD.md](BUILD.md).
+Phases 1 to 5 and 12 to 15 kept their numbers. The rest map old to new as: 6 to 7,
+7 and 8 to 8 and 9, 9 to 10, 10 and 11 to 11, 16 to 6 and 16, 17 to 7, 18 to 10, 19 to 11,
+20 to 17, 21 to 18.
 
 ---
 
@@ -270,6 +274,8 @@ uq_job_source_id UNIQUE (source, external_id)` next to the integer primary key.
 ---
 
 ## 7. Give job sources one small Protocol, and nothing else
+
+**Superseded by**: entry 27
 
 **Phase**: design for phase 7, eJobs source. Not built yet.
 
@@ -1232,6 +1238,452 @@ resource.
 trigger as managed resources; the connection itself is absent from that list because it
 was always a data source, and `gcloud builds connections describe cv-applier-github
 --region=europe-west3` is what actually shows it exists.
+
+---
+
+## 27. Read every job board with one generic crawler, not one adapter per site
+
+**Phase**: 8 and 9, job sources. Design only; not built yet.
+
+**The problem**: Entry 7 planned one adapter per source: eJobs, then the ATS boards, then
+BestJobs and whatever came next. A country has hundreds of job boards, and a plan that
+needs a new file for each one is a plan that covers three of them.
+
+**What we did**: Probed twelve real boards before deciding. Five (eJobs, HiPo, Remotive,
+RemoteOK, We Work Remotely) publish a schema.org `JobPosting` as JSON-LD on every detail
+page, one (BestJobs) publishes none and keeps the posting in a Next.js payload, and six
+refuse an honest crawler. So the code does not vary by site. It varies by extraction
+method, and there are two: read the structured data, or ask the model to read the page. One
+crawler, driven by a `job_sources` table, runs both tiers. The `JobSource` protocol, the
+registry and the per-site files are gone, and `Posting` stays as the one shape everything
+downstream consumes. The ATS JSON APIs are deferred, because they need a hand-kept list of
+company slugs, which is the per-site maintenance this removes.
+
+**Why not the obvious alternative**: Per-site adapters are simple, deterministic and easy
+to debug, and entry 7 argued an interface earns its place by real variation. The probe
+shows where the variation actually is. It is not between sites, and the failures that
+mattered were in discovery, not parsing: HiPo's `sitemap_joburi.xml` holds search pages and
+`sitemap_lastjobs.xml` holds postings, and no per-site parser would have helped with that.
+The other tempting design is to use the model for every page. It costs about a tenth of a
+cent a page and gives a different answer on a different day, which is the wrong default
+for something that runs nightly over thousands of pages and the right fallback for the one
+board in twelve that has no structured data.
+
+**The concept**: A site-specific adapter encodes knowledge of one site. A standard encodes
+knowledge of every site that follows it. Here the standards are the sitemap protocol, the
+robots exclusion standard and schema.org's `JobPosting`, which is common because Google
+for Jobs only indexes postings that carry it. Generalising means parsing the standard
+first, and handling the sites that do not follow it with a weaker, costlier general method,
+which is the model, rather than with more special cases. Making the board list data and not
+code has a second consequence: a row can be added at runtime by the user or by the model,
+which a file in the repository cannot. Entry 7's own expiry condition said the Protocol
+should shrink if adapters turned out to share real behaviour. It fired earlier than
+expected, before any adapter existed.
+
+**Expires when**: the phase 9 coverage table shows the reachable share is too small, or a
+board that matters needs something no generic path gives, such as a login or a browser. That
+board then gets a purpose-built function the crawler calls, not a framework.
+
+**See it yourself**: the probe is reproducible by hand. `url=$(curl -s
+https://www.hipo.ro/sitemap_lastjobs.xml | rg -o -r '$1' '<loc>([^<]+)' | head -1)` then
+`curl -s "$url" | rg -o '"@type": ?"JobPosting"' | head -1` prints the JSON-LD type from a
+live posting. Swap in `https://www.bestjobs.eu/sitemap/sitemap.jobs.en.xml` and the second
+command prints nothing, which is the board that needs the model.
+
+---
+
+## 28. Let the model propose job boards, and let code verify every one
+
+**Phase**: 8, job sources. Design only; not built yet.
+
+**The problem**: Reading boards generically still leaves the question of which boards to
+read. A hand-kept list does not generalise past one country. Asking Vertex AI which boards
+serve a country does, but a model's answer is unverified, and the crawler will fetch
+whatever domain it is handed, from a server that holds a service account.
+
+**What we did**: Ran the question for Romania: 20 domains back for under a tenth of a cent,
+all of them real sites. Then checked them. Three of the twelve "local" entries were
+LinkedIn, Indeed and Glassdoor, which cannot be crawled. Two did not answer at all.
+Several redirect to a `www.` host whose rules are not the bare domain's. So discovery
+stores every answer as a `candidate`, and a candidate becomes `active` only through
+validation: read `robots.txt` on the canonical host, find the sitemap, let the model choose
+which child sitemaps hold postings from sample URLs it is shown, and have the code extract
+three real postings. The model picks, the code verifies. Around that sit the crawler rules in
+PLAN.md section 7: per-host `robots.txt`, no evasion of a 403 or 429, `https` only, an
+address guard on every request and redirect hop, and sitemap URLs fetched only on the
+source's own host. The country comes from the profile, filled from the CV's address and
+correctable by hand, because Google's `openid email profile` claims carry no location.
+
+**Why not the obvious alternative**: Trusting the list is simpler, and the model did
+return real domains. It fails twice. It enables boards that cannot work, which wastes the
+user's time on a failed refresh instead of showing a reason. And it lets a model-chosen
+or user-typed domain point a server at an internal address. Deriving the country from the
+sign-in or the request IP was the other option; the `locale` claim is a language, and IP
+geolocation needs a service and misplaces anyone travelling or on a VPN.
+
+**The concept**: Model output is untrusted input and gets the treatment user input gets:
+validate at the boundary. Proposals from a model are cheap and fallible, and checking one is
+cheap compared to the cost of acting on a wrong one, so a generator and a verifier split
+the work. The security half is server-side request forgery, which is any server fetching
+a URL that someone outside it influenced. On Google Cloud the metadata server at
+`169.254.169.254` hands out the attached service account's access token, the same
+credential mechanism entry 12 chose for its short lifetime, so a crawler that can be aimed
+at that address hands the token to whoever aimed it. The control is to resolve the host and
+refuse private, loopback and link-local addresses, and to do it for each redirect hop,
+because a public URL can redirect to a private one. `robots.txt` is advisory, not
+enforced, and is per host and per user-agent group, which is why honouring it is a rule
+the code has to implement rather than something the network provides.
+
+**Expires when**: the model's lists prove thin for the country in use, in which case a
+curated seed list is added beside it. Or the app becomes hosted and multi-user, which
+reopens both the sourcing question and the threat model, including DNS rebinding, which
+is out of scope for a single-user tool.
+
+**See it yourself**: not runnable yet. After phase 8, `POST /api/sources/discover` then
+`GET /api/sources` shows each domain with its status and reason, and the unit tests for
+`fetch.py` assert that `169.254.169.254` and an `https` redirect to it are refused.
+
+---
+
+## 30. Fingerprint every posting, so duplicates collapse and reposts show their age
+
+**Phase**: 8 and 10, job sources and matching. Design only; not built yet.
+
+**The problem**: Once many boards are read, the same job turns up on several of them. A
+job that never gets filled is also reposted every few weeks under a new URL with a fresh
+date. The unique key on `(source, external_id)` treats each of those as a new posting, so
+matches fill with copies and an old job looks new. A public write-up of a very large job
+scraper found that how often a posting is reposted is a strong ghost-job signal, and
+that is the part worth keeping.
+
+**What we did**: Each row gets a `fingerprint`, a hash of the normalised company, title and
+city, and a `first_seen_at` that is set on insert and never updated. Matching collapses
+postings that share a fingerprint into one match, lists the other boards it appears on,
+counts same-board reposts, and measures recency from the earliest of `posted_at` and
+`first_seen_at`. The reason string says "first seen 40 days ago, reposted 3 times" when it
+matters. The write-up used embedding similarity per company for this. We start with the
+exact fingerprint.
+
+**Why not the obvious alternative**: Embeddings catch a reworded title, which an exact
+hash misses. They also cost a call per posting and need somewhere to put and search
+vectors, and the common cases, the same listing copied between boards and one employer's
+system reposting itself, are exact or nearly so. An exact fingerprint is free,
+deterministic and explainable. Using `posted_at` alone as the age fails because a repost
+can carry a fresh date, and using `first_seen_at` alone fails on the first crawl, when every
+posting looks brand new. The earliest of the two is right in both cases.
+
+**The concept**: Deciding whether two records describe the same real-world thing is called
+record linkage, and it is usually done in two steps: a cheap blocking key to find
+candidates, then an expensive similarity score within each block. The fingerprint is a
+blocking key used as the final rule, which is enough here, and the upgrade is a similarity
+score inside the block. The second idea is event time against ingestion time. `posted_at`
+is what the source claims and it can be wrong. `first_seen_at` is when this system first
+observed the posting, which nobody else can change. When a source cannot be trusted about
+time, record your own first observation and never overwrite it. In SQL that means an
+upsert's `DO UPDATE` list must leave the column out, which is the same idempotency care as
+entry 6.
+
+**Expires when**: duplicates visibly survive in the Matches screen because titles were
+reworded, at which point description similarity inside the same company is added, or the
+table grows until grouping by fingerprint at query time is slow and the group is
+materialised.
+
+**See it yourself**: not runnable yet. After phase 8, `docker compose exec db psql -U cv -d
+cv_applier -c "select fingerprint, count(*), array_agg(distinct source) from jobs group by
+fingerprint having count(*) > 1 limit 10"` lists the jobs seen more than once.
+
+---
+
+## 31. Vet employers once by hand, keep salary and seniority deterministic, and decline what needs evasion
+
+**Phase**: 8 and 10, and the deferred ATS item. Design only; not built yet.
+
+**The problem**: The same write-up crawls 30,000 company career pages, runs a model over
+every one of 2.1 million postings, and puts them in Elasticsearch, behind a browser
+renderer, rotating paid proxies, a purchased company database and weeks of manual vetting.
+That is sized for a different problem. The question is which of its ideas survive this
+project's constraints: no evasion, no browser in v1, no paid vendors beyond Vertex AI, one
+user.
+
+**What we did**: Tested the central premise before adopting anything. Asked Vertex AI for 12
+well-known tech employers in Romania with their career pages, then checked them. None could
+be read by the generic crawler: three have no sitemap, four have a sitemap that does not
+list postings, one disallows crawlers, two have no job URLs, one returned 403 and one
+points at Workday. Guessing a slug from the company name found a Greenhouse, Lever or
+Ashby board for one of the twelve, UiPath on Ashby with 106 jobs, 21 of them mentioning
+Romania. So employer career pages are not a source, and the ATS watchlist stays deferred,
+now with evidence that it yields real local jobs for employers that use it. Three ideas were
+adopted. A "hide this company" action keeps the write-up's "vet each company once and trust
+it" at one user's scale. A salary is read from JSON-LD `baseSalary` and filtered on only when
+it is stated. A seniority level is read from the title and compared with your years of
+experience. Running the model over every posting was declined at about $0.0007 a posting,
+which is roughly $10 a month at 500 postings a day against a $12 baseline. If it is wanted
+later it runs on the shortlist only, as entry 8 says.
+
+**Why not the obvious alternative**: Copying the architecture whole works for its author
+because he rents browser rendering and proxies and bought the company list. Our rules rule
+those out on purpose, and the probe shows what is left is a thin slice. A stricter salary
+filter, one that drops postings with no salary, was also rejected: most postings state
+none, so it would hide most of the market and look like a working filter.
+
+**The concept**: Borrow ideas, not architectures. The idea, vet each employer once and rank
+on signals instead of a model call, survives at any scale. The machinery, proxies and a
+search cluster, is sized to 2 million rows. At personal scale the human is the cheapest
+classifier: a hide button costs one click per bad company and the decision persists. A
+filter should also fail open on missing data. It removes what it knows is wrong and keeps
+what it does not know, because a field that is usually absent would otherwise delete good
+results without any sign that it did. And the premise was tested first. An hour of probing
+turned an assumption about employer career pages into a number.
+
+**Expires when**: hiding by hand gets tedious, and an agency flag read by the model once per
+company replaces it. Or when specific employers are wanted, and `(provider, slug)` sources
+are added. Or when posting volume makes per-posting enrichment affordable and the shortlist
+is not enough.
+
+**See it yourself**: `curl -s https://api.ashbyhq.com/posting-api/job-board/uipath | rg -o
+'"jobUrl"' | wc -l` prints the number of UiPath's open postings, 106 when this was written.
+
+---
+
+## 32. Render JavaScript-only boards with Playwright, behind the same address guard
+
+**Phase**: 19, browser rendering. Design only; not built yet.
+
+**The problem**: A plain HTTP fetch returns the page a server sends. Some boards send an
+empty shell and build the listings in the browser, so neither extraction tier sees a
+posting. Entry 27 left those boards as `failed` with `needs a browser`, and asked for them to
+be measured before any browser was added.
+
+**What we did**: Added a render step as an optional phase after the coverage table, not
+inside the first crawler. Validation retries an empty page through headless Chromium, and
+records `needs_render` on the source when that makes tier 1 or tier 2 work. The browser is a
+different way to fetch and changes nothing else: it reads `robots.txt` first, sends the
+same honest User-Agent, runs no stealth plugins or proxies, and a 403 is still a refusal.
+Every request it makes, not only the first, goes through the address guard from entry 28.
+
+**Why not the obvious alternative**: Rendering every page in a browser would remove the
+whole question of which tier a board needs. It would also make every fetch seconds slow,
+add hundreds of megabytes to the image, and put untrusted JavaScript in the process that
+holds the service account, to read pages most of which already work with a plain request.
+In the twelve boards probed, none failed for want of a browser: they failed on bot blocks and
+on `robots.txt`, which a browser does not change. So rendering is the fallback and
+the plan says to skip the phase if the coverage table shows no board that needs it.
+
+**The concept**: A browser is a program that fetches code from strangers and runs it, so
+the guard that protects a plain fetch has to move from "the URL I chose" to "every URL the
+page asks for". A script on a rendered page can request any address its network can reach,
+which is why the check goes into the browser's request-routing hook and not only before
+navigation. It is also a case of choosing the weakest tool that works. Plain request,
+then structured data, then the model, then a browser, each step costlier and riskier
+than the one before, tried in that order.
+
+**Expires when**: no board needs it, in which case the phase is skipped, or a board needs
+interaction beyond loading, such as clicking through a consent wall, which this does not do
+and which crosses into the form automation that stays out of scope.
+
+**See it yourself**: not runnable yet. After phase 19, the unit test in
+`backend/tests` aborts a browser request to `169.254.169.254`, and `GET /api/sources`
+shows `needs_render` on the board that needed it.
+
+---
+
+## 33. Take JobSpy for LinkedIn and Indeed as an opt-in exception, kept in one module
+
+**Superseded by**: entry 34
+
+**Phase**: 20, JobSpy. Design only; not built yet.
+
+**The problem**: LinkedIn and Indeed are the largest sources of listings, and the crawler
+reaches neither: LinkedIn's `robots.txt` disallows crawlers and Indeed answers an honest one
+with 403 and 404. You asked for the JobSpy library, which is built for exactly those two
+sites, and the plan's rule has been to never work around a refusal.
+
+**What we did**: Read the package before planning it, version 1.4.1. For Indeed it posts to
+`apis.indeed.com/graphql` with the API key and headers of Indeed's own iOS app. For
+LinkedIn it scrapes pages that `robots.txt` disallows. It uses `curl_cffi` to impersonate a
+browser's TLS fingerprint and supports rotating proxies, and its README calls the proxy
+option support "to bypass blocking". That is the evasion the crawler rules forbid, so
+it did not go in as a source like the others. It is an explicit exception: two source rows,
+off by default, behind a switch with a warning that says what it does, in one module, with
+the limits that can still hold. No proxies or rotation, no login, a cap of 30 results, no
+retry after a block, a pinned version, manual refresh only until measured from where it will
+run. The plan states that it breaches both sites' terms, that the Indeed route depends on
+an embedded app key, and that Cloud Run's address range may be blocked, which is unmeasured.
+
+**Why not the obvious alternative**: Adding it as one more source would hide that it breaks a
+rule the rest of the design keeps, and the crawler's rules would stop being true. Refusing it
+was the other option, and it is your project and your risk to accept: with no login involved
+the realistic cost is an address getting blocked, and a terms breach you take knowingly. The
+compliant route, JSearch through Google for Jobs, needs a key and stays in the plan as the
+alternative.
+
+**The concept**: An exception to a rule is safest when it is explicit, isolated and
+removable. Putting it in one module behind its own switch keeps the rule true everywhere
+else and lets you delete the exception by removing one file and two rows. The second idea
+is reading what a library does and not what it promises. "Scrapes LinkedIn and Indeed" is
+the README. An embedded mobile-app key, TLS impersonation and proxy rotation are the
+package, and the second description is the one that decides whether it fits your rules. An
+embedded key is also a dependency on something never issued to you, so the integration
+can stop working on the day the key changes, without any change on our side.
+
+**Expires when**: either site offers a sanctioned way to read listings for this use, or the
+library stops working and is not worth chasing, or the app becomes hosted and multi-user,
+which changes who carries the terms-of-service risk.
+
+**See it yourself**: `pip download python-jobspy==1.4.1 --no-deps -d /tmp/js && python3 -m
+zipfile -e /tmp/js/*.whl /tmp/js/pkg && rg -n "indeed-app-info"
+/tmp/js/pkg/jobspy/indeed/constant.py` prints the iOS app header it sends.
+
+---
+
+## 34. Read employers' ATS feeds, found by city, and drop LinkedIn and Indeed
+
+**Phase**: 20, employers and their ATS feeds. Design only; not built yet.
+
+**The problem**: Entry 33 took JobSpy as a deliberate exception to reach LinkedIn and
+Indeed, at the price of breaching both sites' terms. You chose to drop LinkedIn and Indeed
+altogether and to go to the source instead: the employers' own career pages and
+applicant-tracking systems, as the large scraper write-up in entries 30 and 31 does, found
+from the city on your CV. Entry 31 had declined employer career pages, but on a rough test
+of 12 tech employers, with the careers URL, the sitemap and the slug all guessed by name.
+The question was whether the idea was dead or the test was weak.
+
+**What we did**: Repeated the test the way the plan would run it. The model named the 10
+largest employers in each of Bucharest, Cluj-Napoca and Timisoara, 30 in all, with their
+careers URLs. Each page was fetched and searched for ATS links, and the public feed of six
+ATS products and Workday's JSON endpoint was tried. Eighteen of the 30 URLs were
+reachable. Only 4 pages showed an ATS in raw HTML. Five companies had a readable feed and
+four had jobs in the named city: Endava and Continental on SmartRecruiters, Accenture and
+Flex on Workday. One guessed feed was a different company: `accenture` on Recruitee. So
+the idea is not dead, but it covers about one employer in six, and the banks, telecoms and
+retailers were on portals not read here. The plan now drops JobSpy and every LinkedIn and
+Indeed item. Phase 20 asks the model for employer names and domains by city and titles,
+finds the ATS by code, verifies the feed belongs to the company, and reads it with one
+small reader per provider. The profile gains `city`, and matching prefers the employer's
+own posting, with its direct apply link, over a board's copy.
+
+**Why not the obvious alternative**: Crawling each employer's careers page the way the
+crawler reads a board fails twice over: the postings live on another host, and the page
+that links there is often a script shell. Taking the model's careers URL on trust fails for
+12 of 30. Trusting a slug derived from a company name fails when another company owns the
+name. Keeping JobSpy beside this was the other option and it was your call to drop it.
+
+**The concept**: A job board or an aggregator copies postings from the employers' own
+systems. An ATS is where they originate, and most ATS products publish a feed because they
+exist to be embedded in a careers page. Going upstream trades breadth for directness: fewer
+sites, each a primary source with a direct apply link and no agency in between, and the
+fingerprint from entry 30 lets both kinds of source coexist without duplicates. The
+variation also moves. It was between sites, which is why entry 27 refused per-site
+adapters, and here it is between a handful of ATS products, so a reader per provider is the
+right grain, because one reader covers thousands of companies. Last, an inferred
+identifier is a claim. A slug guessed from a name asserts that this feed is that company,
+and `accenture` on Recruitee shows the claim can be false, so it is verified, the same
+proposer and verifier split as entry 28.
+
+**Expires when**: the coverage table shows employer feeds add little for the companies you
+care about, or most of them sit on providers with no reader, in which case readers are
+added or the phase is dropped, or Workday changes its undocumented endpoint.
+
+**See it yourself**: `curl -s "https://api.smartrecruiters.com/v1/companies/endava/postings?limit=1"
+| rg -o '"totalFound":[0-9]+'` prints Endava's open postings, 131 when this was written.
+`curl -s -X POST -H 'Content-Type: application/json' -d
+'{"appliedFacets":{},"limit":1,"offset":0,"searchText":"Timisoara"}'
+https://accenture.wd103.myworkdayjobs.com/wday/cxs/accenture/AccentureCareers/jobs | rg -o
+'"total":[0-9]+'` prints the Accenture jobs matching Timisoara, 40 when this was written.
+
+---
+
+## 35. Query each company's ATS feed, and search the text you stored
+
+**Phase**: 10 and 20, matching and employer feeds. Design only; not built yet.
+
+**The problem**: The same write-up as entries 30 and 31 builds its catalogue by buying a
+company list, crawling each careers page, asking a model whether the HTML is a job
+description, embedding every description to catch reposts, and serving boolean queries from
+Elasticsearch. You asked for that behaviour, and for the obvious shortcut: the big ATS
+sites already publish the jobs, so why crawl the HTML at all?
+
+**What we did**: Checked the shortcut against the live hosts. A Greenhouse URL with a
+company slug returns that company's jobs. The same host with no slug, `/v1/boards`, returns
+404. The other feeds are one slug per request too. SmartRecruiters can narrow inside a
+company: `country=ro` on Endava returned 81 postings, against 131 with no filter. So the
+ATS is the right place to read, and it is not a single search box over every company. A
+reseller that has already gathered the slugs is a paid API, which stays out. Phase 20 now
+gets a slug three ways: the model names the company, a board posting's apply link is
+already on a known ATS host, or you paste the URL. The link is parsed and not fetched.
+One model call per company labels a staffing agency, and an agency is stored switched off.
+Phase 10 grows a boolean query over the title and description (`pandas OR r`, quotes,
+`AND`, `OR`, `NOT`, parentheses) in ordinary Python, and a word-overlap check inside one
+company so a rewritten repost keeps the earliest date. The "newer than 30 days" filter
+uses that earliest date. Salary, remote and employment type come from the JSON when the
+feed has them. Refresh stays nightly, one request per second, and the employer portion
+stops after 15 minutes.
+
+**Why not the obvious alternative**: Copying the write-up's machinery means a purchased
+company directory, proxies, a browser on every page, a model call per posting and a second
+database. The feeds already return structured jobs, so a classifier over raw HTML has
+nothing to decide. Elasticsearch's boolean query is a `tsquery` in PostgreSQL, and at this
+size it does not even need to be one: the matcher can apply the query in process.
+Embeddings catch a paraphrase that shares few words. Word overlap catches the near-copy,
+which is the repost the exact fingerprint misses, and entry 30 already named similarity
+inside the company as the upgrade. Bringing the agency label forward is because apply-link
+harvesting will meet recruiters immediately, which is the case entry 31 was waiting for.
+
+**The concept**: A public API that is keyed by tenant is a directory you do not have. The
+valuable part of "query the ATS" is the per-company feed, and the work is collecting
+slugs from places you already look. Boolean search and duplicate detection are queries
+over text you stored, which is a different problem from fetching, and it belongs in the
+database you have.
+
+**Expires when**: a paraphrased repost still looks new, which is when embeddings earn a
+place, or the 15 minute employer budget leaves companies you care about stale, or a
+provider you want has no public feed.
+
+**See it yourself**: `curl -s -o /dev/null -w "%{http_code}\n" https://boards-api.greenhouse.io/v1/boards`
+prints 404. `curl -s -o /dev/null -w "%{http_code}\n" https://boards-api.greenhouse.io/v1/boards/stripe/jobs`
+prints 200. `curl -s "https://api.smartrecruiters.com/v1/companies/endava/postings?limit=1&country=ro" | rg -o '"totalFound":[0-9]+'`
+prints Endava's postings in Romania, 81 when this was written.
+
+---
+
+## 29. Build each screen in the phase that builds its API
+
+**Phase**: 6 onward. Design only; not built yet.
+
+**The problem**: The original order built all of the backend first, phases 6 to 11 checked
+through `/docs` and `curl`, and the frontend afterwards, phases 16 to 20 after the first
+deploy. The things that most needed looking at were invisible until the end. Whether an
+extracted skills list is recognisably yours, or whether the top ten matches are plausible,
+is a judgement about rendered output, not a status code. And no real Google login has ever
+run in a browser, because `GOOGLE_CLIENT_ID` is still empty.
+
+**What we did**: Phase 6 is now the frontend shell and sign-in, which makes it the first
+live login. Phases 7, 8, 10 and 11 each ship their screen with their API: Profile, Job
+boards, Matches and Tracker. Phase 16 keeps only the packaging, the multi-stage Dockerfile
+and static serving, because there is nothing to package until something is deployed. The
+count went from twenty-one phases to eighteen because the screens stopped being phases of
+their own.
+
+**Why not the obvious alternative**: Backend first is a respectable order. It lets the API
+settle before a UI depends on it and avoids rework in screens. Here the API's acceptance
+test is human judgement, which needs a screen, and the screens are thin enough that the
+rework is small. Moving the Dockerfile packaging forward as well was rejected: development
+runs the Vite dev server for hot reload, and the production image earns nothing until phase 13.
+
+**The concept**: Building by layer pushes integration risk to the end, where it is most
+expensive. A vertical slice, data and API and screen for one feature, puts every seam under
+test as soon as the feature exists: the session cookie across the dev proxy, a multipart
+upload, a model call that takes seconds and needs a spinner. Cookies are not isolated by
+port, which is why a cookie set by the backend on port 8000 is sent by the dev server on
+5173, and why the first real login is worth running early rather than assuming. Short
+feedback loops are the reason, not tidiness.
+
+**Expires when**: the frontend gets its own release cadence or team, or something other
+than this UI consumes the API. Then the API contract comes first and the screens follow it.
+
+**See it yourself**: not runnable yet. After phase 6, `npm run dev` and
+`http://localhost:5173` show the sign-in page, and `ls frontend/src/pages` gains one file
+per phase from there.
 
 ---
 
