@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from google import genai
 
 from .config import settings
+from .logging import logger
 from .schemas import ExtractedProfile
 
 
@@ -48,23 +49,35 @@ an ISO 4217 code only when clearly stated.
 CV text:
 {cv_text}"""
     try:
-        client = genai.Client(
-            vertexai=True,
-            project=settings.google_cloud_project,
-            location=settings.vertex_location,
-        )
-        response = client.models.generate_content(
-            model=settings.vertex_model,
-            contents=prompt,
-            config={
-                "response_mime_type": "application/json",
-                "response_schema": PROFILE_SCHEMA,
-            },
-        )
+        response = None
+        for attempt in range(2):
+            try:
+                logger.info("Starting CV profile extraction attempt=%s", attempt + 1)
+                client = genai.Client(
+                    vertexai=True,
+                    project=settings.google_cloud_project,
+                    location=settings.vertex_location,
+                )
+                response = client.models.generate_content(
+                    model=settings.vertex_model,
+                    contents=prompt,
+                    config={
+                        "response_mime_type": "application/json",
+                        "response_schema": PROFILE_SCHEMA,
+                    },
+                )
+                break
+            except Exception:
+                logger.warning("CV profile extraction attempt=%s failed", attempt + 1, exc_info=True)
+                if attempt == 1:
+                    raise
+        if response is None:
+            raise RuntimeError("Vertex returned no response")
         return ExtractedProfile.model_validate(json.loads(_response_text(response)))
     except HTTPException:
         raise
     except Exception as exc:
+        logger.error("CV profile extraction failed", exc_info=True)
         raise HTTPException(status_code=502, detail="CV profile extraction failed") from exc
 
 

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     user_agent: str = "cv-applier/0.1 (+personal job search assistant)"
     source_request_delay: float = 1.0
+    log_file: str = "backend/logs/app.log"
 
 
 settings = Settings()

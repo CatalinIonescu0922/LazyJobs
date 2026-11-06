@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from ..cv import read_cv
 from ..db import get_db
 from ..llm import extract_profile
+from ..logging import logger
 from ..models import Profile, User
 from ..schemas import ProfileResponse, ProfileUpdate
 from ..session import current_user
@@ -27,6 +28,7 @@ async def upload_cv(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ProfileResponse:
+    logger.info("CV upload started: filename=%s user_id=%s", file.filename, user.id)
     text, content = await read_cv(file)
     extracted = extract_profile(text)
     profile = _get_or_create_profile(db, user)
@@ -45,6 +47,7 @@ async def upload_cv(
     store_cv(user.id, profile.cv_filename, content)
     db.commit()
     db.refresh(profile)
+    logger.info("CV upload completed: filename=%s user_id=%s", profile.cv_filename, user.id)
     return _profile_response(profile)
 
 

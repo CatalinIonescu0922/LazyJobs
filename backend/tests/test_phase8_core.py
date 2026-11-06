@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app import llm
 from app.sources.extract import _country_code, extract_jsonld
 from app.sources.fetch import FetchError, SafeFetcher
 from app.textnorm import fingerprint, normalise
@@ -42,3 +43,16 @@ def test_fetch_rejects_private_dns():
     with patch("app.sources.fetch.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("169.254.169.254", 443))]):
         with pytest.raises(FetchError, match="blocked"):
             SafeFetcher("example.com").get("https://example.com/jobs/1")
+
+
+def test_extract_profile_retries_a_transient_vertex_failure():
+    response = type("Response", (), {"text": '{"full_name":"Ada Lovelace","headline":"Engineer","summary":"","titles":[],"skills":[],"years_experience":0,"country":"","city":"","salary_currency":""}'})()
+    client = type("Client", (), {"models": type("Models", (), {"generate_content": lambda self, **kwargs: response})()})()
+
+    with patch.object(llm.settings, "google_cloud_project", "project"), patch.object(
+        llm.genai, "Client", side_effect=[RuntimeError("credentials warming up"), client]
+    ) as create_client:
+        extracted = llm.extract_profile("Ada Lovelace")
+
+    assert extracted.full_name == "Ada Lovelace"
+    assert create_client.call_count == 2

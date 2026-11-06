@@ -1,5 +1,6 @@
 services:
   app:
+    pull_policy: build
     build: ./backend
     ports:
       - "8000:8000"
