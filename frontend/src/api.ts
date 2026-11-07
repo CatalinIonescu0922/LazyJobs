@@ -61,6 +61,7 @@ export type Profile = {
 export type Source = {
   id: number;
   domain: string;
+  source_url: string;
   kind: string;
   status: string;
   reason: string;
@@ -98,6 +99,7 @@ export type JobFilters = {
 export type JobSearchResult = {
   jobs: Job[];
   refreshed: boolean;
+  match_scope: string;
 };
 
 // A 401 means signed out, which is an answer, not a failure worth retrying.
@@ -123,11 +125,11 @@ export function discoverSources(kind: string): Promise<{ created: number; propos
   return api(`/api/sources/discover?kind=${encodeURIComponent(kind)}`, { method: "POST" });
 }
 
-export function addSource(domain: string): Promise<Source> {
+export function addSource(url: string): Promise<Source> {
   return api<Source>("/api/sources", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ domain, kind: "board" }),
+    body: JSON.stringify({ url, kind: "career" }),
   });
 }
 

@@ -35,7 +35,9 @@ The main page is the job results view. The first CV upload automatically discove
 refreshes the user's sources, then opens the dashboard with roles filtered to hybrid and
 onsite work in the profile city. The dashboard provides manual keyword, location, work
 mode, and posted-date filters over cached results. `/sources` remains an advanced
-source-management screen rather than part of the normal first-login workflow.
+source-management screen rather than part of the normal first-login workflow. The
+dashboard reads cached jobs immediately; crawling happens automatically after CV upload,
+so a slow or unavailable board cannot block the main page.
 
 ## Contracts
 

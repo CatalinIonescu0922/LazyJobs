@@ -3,9 +3,11 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import Job, JobSource, utcnow
+from ..logging import logger
 from ..textnorm import fingerprint
 from .extract import extract_jsonld
 from .fetch import FetchError, SafeFetcher
@@ -35,6 +37,7 @@ def sitemap_urls(fetcher: SafeFetcher, sitemap_url: str) -> list[tuple[str, str 
 
 
 def refresh_source(db: Session, source: JobSource) -> dict[str, int | str]:
+    logger.info("Crawl started: source=%s status=%s sitemap=%s", source.domain, source.status, bool(source.sitemap_url))
     fetcher = SafeFetcher(source.domain)
     if source.status != "active":
         validate_source(db, source)
@@ -44,7 +47,11 @@ def refresh_source(db: Session, source: JobSource) -> dict[str, int | str]:
     urls = sitemap_urls(fetcher, source.sitemap_url)
     urls.sort(key=lambda item: item[1] or "", reverse=True)
     added = updated = failed = 0
+    seen_urls: set[str] = set()
     for url, _ in urls[:MAX_POSTINGS]:
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
         if source.posting_prefix and not url.startswith(source.posting_prefix):
             continue
         existing = db.scalar(select(Job).where(Job.source == source.domain, Job.external_id == url))
@@ -58,11 +65,17 @@ def refresh_source(db: Session, source: JobSource) -> dict[str, int | str]:
         if not posting or not posting.title or not posting.description:
             failed += 1
             continue
-        _upsert_job(db, posting)
-        added += 1
+        try:
+            with db.begin_nested():
+                _upsert_job(db, posting)
+                db.flush()
+            added += 1
+        except IntegrityError:
+            logger.warning("Duplicate job skipped: source=%s external_id=%s", source.domain, url)
     source.last_refreshed_at = utcnow()
     source.posting_count = db.query(Job).filter(Job.source == source.domain).count()
     db.commit()
+    logger.info("Crawl completed: source=%s status=%s sitemap_urls=%s added=%s failed=%s stored=%s", source.domain, source.status, len(urls), added, failed, source.posting_count)
     return {"source_id": source.id, "status": source.status, "added": added, "updated": updated, "failed": failed, "reason": source.reason}
 
 
@@ -90,6 +103,7 @@ def validate_source(db: Session, source: JobSource) -> None:
     except (FetchError, ET.ParseError) as exc:
         source.status = "failed"
         source.reason = str(exc)
+        logger.warning("Source validation failed: source=%s reason=%s", source.domain, source.reason)
     db.commit()
 
 

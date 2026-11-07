@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { Job, JobFilters, listJobs, logout, meQuery, profileQuery } from "../api";
@@ -20,7 +20,16 @@ export default function Home() {
   const jobs = useQuery({
     queryKey: ["jobs", submitted],
     queryFn: () => listJobs(submitted),
+    staleTime: 60_000,
   });
+  useEffect(() => {
+    if (jobs.isError) {
+      console.error("Job search failed", { filters: submitted, error: jobs.error });
+    }
+    if (jobs.isSuccess) {
+      console.info("Job search completed", { filters: submitted, resultCount: jobs.data.jobs.length, refreshed: jobs.data.refreshed });
+    }
+  }, [jobs.isError, jobs.isSuccess, jobs.error, jobs.data, submitted]);
   const signOut = useMutation({
     mutationFn: logout,
     onSuccess: () => {
@@ -76,10 +85,12 @@ export default function Home() {
             <option value="30">Past month</option>
           </select>
           <button type="submit" className="rounded-md bg-teal-400 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-teal-300">Search</button>
+          <button type="button" onClick={() => { const allFilters = { query: "", location: "", mode: "all", days: null }; setFilters(allFilters); setSubmitted(allFilters); }} className="rounded-md border border-white/15 px-4 py-2.5 text-sm text-slate-200 hover:bg-white/10">Show all jobs</button>
         </form>
 
         <div className="mb-4 flex items-center justify-between gap-3">
           <p className="text-sm text-slate-400">{jobs.isPending ? "Finding roles..." : `${jobs.data?.jobs.length ?? 0} roles found`}</p>
+          {jobs.data?.match_scope !== "profile_and_location" && jobs.data?.jobs.length ? <p className="text-xs text-amber-300">Showing broader matches because no exact city/profile match was found.</p> : null}
         </div>
 
         {jobs.isError && <p className="border border-red-400/30 bg-red-400/10 p-4 text-sm text-red-200">Could not load jobs. {jobs.error instanceof Error ? jobs.error.message : "Try again shortly."}</p>}

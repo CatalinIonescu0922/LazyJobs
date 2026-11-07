@@ -10,6 +10,7 @@ from ..models import JobSource, Profile, User
 from ..schemas import SourceCreate, SourceDiscoveryResponse, SourceResponse, SourceRefreshResponse, SourceUpdate
 from ..session import current_user
 from ..sources.crawl import refresh_source
+from ..sources.career import refresh_career_source
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
 UNSUPPORTED_DOMAINS = {
@@ -29,13 +30,15 @@ def list_sources(user: User = Depends(current_user), db: Session = Depends(get_d
 
 @router.post("", response_model=SourceResponse, status_code=201)
 def add_source(payload: SourceCreate, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    domain = _domain(payload.domain)
+    source_url = _source_url(payload.url or payload.domain)
+    domain = _domain(source_url)
     if _is_unsupported(domain):
         raise HTTPException(status_code=400, detail="This platform is not supported by the safe public crawler")
-    existing = db.scalar(select(JobSource).where(JobSource.user_id == user.id, JobSource.domain == domain, JobSource.kind == payload.kind))
+    kind = payload.kind if payload.kind in {"board", "career"} else "career"
+    existing = db.scalar(select(JobSource).where(JobSource.user_id == user.id, JobSource.domain == domain, JobSource.kind == kind))
     if existing:
         return _source_response(existing, db)
-    source = JobSource(user_id=user.id, domain=domain, kind=payload.kind)
+    source = JobSource(user_id=user.id, domain=domain, source_url=source_url, kind=kind)
     db.add(source)
     db.commit()
     db.refresh(source)
@@ -94,7 +97,7 @@ def refresh(source_id: int, user: User = Depends(current_user), db: Session = De
             failed=0,
             reason=source.reason,
         )
-    result = refresh_source(db, source)
+    result = refresh_career_source(db, source) if source.kind == "career" else refresh_source(db, source)
     return SourceRefreshResponse.model_validate(result)
 
 
@@ -114,6 +117,16 @@ def _domain(value: str) -> str:
     return domain
 
 
+def _source_url(value: str) -> str:
+    value = value.strip()
+    if "://" not in value:
+        value = f"https://{value}"
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Source URL must use HTTPS")
+    return value
+
+
 def _is_unsupported(domain: str) -> bool:
     return domain in UNSUPPORTED_DOMAINS or any(domain.endswith(f".{blocked}") for blocked in UNSUPPORTED_DOMAINS)
 
@@ -122,6 +135,7 @@ def _source_response(source: JobSource, db: Session) -> SourceResponse:
     return SourceResponse(
         id=source.id,
         domain=source.domain,
+        source_url=source.source_url,
         kind=source.kind,
         status=source.status,
         reason=source.reason,

@@ -9,6 +9,9 @@ stored in `job_sources`; the crawler reads sitemap URLs and extracts schema.org
 - `POST /api/sources/discover?kind=boards` asks Vertex AI for board domains for the
   authenticated profile country and stores new domains as `candidate` sources.
 - `POST /api/sources` adds a board domain manually.
+- `POST /api/sources` also accepts a full HTTPS career-page URL. These `career` sources
+  fetch the supplied page and same-domain career/job links, then extract `JobPosting`
+  JSON-LD.
 - `POST /api/sources/{id}/refresh` validates a candidate, then reads up to 100 sitemap
   entries and upserts postings.
 - `PATCH /api/sources/{id}` enables or disables a source.
@@ -35,4 +38,7 @@ cross-board duplicates. `first_seen_at` is set only when a job is first inserted
 
 The local source APIs and screen are ready for Phase 9's LLM extraction fallback and Phase
 20's employer ATS feeds. They intentionally do not use browser rendering or site-specific
-adapters in Phase 8.
+adapters in Phase 8. A custom page that is mostly a JavaScript shell is marked `needs
+browser rendering` instead of being reported as an empty source. Playwright is the right
+open-source renderer for that next adapter, and it must retain the same HTTPS, robots,
+host, DNS, redirect, and response-size guards as `SafeFetcher`.

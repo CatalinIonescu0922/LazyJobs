@@ -85,8 +85,9 @@ class ExtractedProfile(BaseModel):
 
 
 class SourceCreate(BaseModel):
-    domain: str
-    kind: str = "board"
+    domain: str = ""
+    url: str = ""
+    kind: str = "career"
 
 
 class SourceUpdate(BaseModel):
@@ -96,6 +97,7 @@ class SourceUpdate(BaseModel):
 class SourceResponse(BaseModel):
     id: int
     domain: str
+    source_url: str
     kind: str
     status: str
     reason: str
@@ -148,3 +150,4 @@ class JobResponse(BaseModel):
 class JobSearchResponse(BaseModel):
     jobs: list[JobResponse]
     refreshed: bool = False
+    match_scope: str = "profile_and_location"

@@ -103,6 +103,7 @@ class JobSource(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     domain: Mapped[str] = mapped_column(String(255))
+    source_url: Mapped[str] = mapped_column(String(1024), default="")
     kind: Mapped[str] = mapped_column(String(32), default="board")
     status: Mapped[str] = mapped_column(String(32), default="candidate", index=True)
     reason: Mapped[str] = mapped_column(Text, default="")
