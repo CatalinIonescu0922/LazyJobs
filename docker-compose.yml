@@ -11,6 +11,8 @@ services:
     secrets:
       - source: google_adc
         target: google_application_credentials.json
+    volumes:
+      - ./backend/logs:/var/log/cv-applier
     command: >-
       sh -c "alembic upgrade head && exec uvicorn app.main:app
       --host 0.0.0.0 --port $${PORT:-8000}
