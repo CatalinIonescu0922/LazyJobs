@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import {
   ProfileUpdate,
   profileQuery,
@@ -26,6 +27,7 @@ const emptyForm: ProfileUpdate = {
 export default function Profile() {
   const profile = useQuery(profileQuery);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [form, setForm] = useState<ProfileUpdate>(emptyForm);
   const [titles, setTitles] = useState("");
   const [skills, setSkills] = useState("");
@@ -119,6 +121,15 @@ export default function Profile() {
             </p>
           </div>
           {message && <p className="text-sm text-teal-700">{message}</p>}
+          {profile.data.has_cv && (
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+            >
+              Continue to dashboard
+            </button>
+          )}
         </header>
 
         <section className="mb-6 border border-slate-200 bg-white p-5 shadow-sm">

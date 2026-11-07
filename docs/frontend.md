@@ -26,6 +26,11 @@ The frontend holds no state of its own about who is signed in. The session is th
 
 Every later page is a child of the `ProtectedRoute` element in `router.tsx`.
 
+After authentication, `ProtectedRoute` loads the profile before rendering a protected
+page. Users without an uploaded CV are sent to `/profile` to complete initial setup;
+users whose profile has `has_cv` set continue to `/` as the main page. The profile page
+remains available for later corrections.
+
 ## Contracts
 
 - `api(path, init)` always sends `credentials: "include"`. A non-2xx response throws
