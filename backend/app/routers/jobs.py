@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..llm import propose_employers, propose_job_boards
-from ..logging import logger
+from ..logging import logger, timed
 from ..models import Job, JobSource, Profile, User, utcnow
 from ..schemas import JobResponse, JobSearchRequest, JobSearchResponse
 from ..session import current_user
@@ -64,6 +64,7 @@ def _refresh_user_sources(db: Session, user: User, profile: Profile) -> None:
         _refresh_user_sources_locked(db, user, profile)
 
 
+@timed
 def _refresh_user_sources_locked(db: Session, user: User, profile: Profile) -> None:
     sources = db.scalars(
         select(JobSource).where(JobSource.user_id == user.id, JobSource.status.in_(["active", "candidate"]))
@@ -106,7 +107,7 @@ def _refresh_user_sources_locked(db: Session, user: User, profile: Profile) -> N
     logger.info("Job refresh plan: user_id=%s refresh_count=%s skipped_failed=%s", user.id, len(sources_to_refresh), len(sources) - len(sources_to_refresh))
     for source in sources_to_refresh:
         try:
-            result = refresh_career_source(db, source) if source.kind in {"career", "employer"} else refresh_source(db, source)
+            result = refresh_career_source(db, source, profile.country, profile.city) if source.kind in {"career", "employer"} else refresh_source(db, source)
             logger.info("Job source refreshed: user_id=%s source=%s status=%s added=%s failed=%s posting_count=%s", user.id, source.domain, result["status"], result["added"], result["failed"], source.posting_count)
         except Exception as exc:
             db.rollback()
@@ -117,8 +118,9 @@ def _refresh_user_sources_locked(db: Session, user: User, profile: Profile) -> N
     logger.info("Job refresh completed: user_id=%s active_sources=%s", user.id, sum(source.status == "active" for source in sources))
 
 
+@timed
 def _search(db: Session, user: User, profile: Profile, request: JobSearchRequest) -> JobSearchResponse:
-    if request.mode not in {"all", "remote", "hybrid", "onsite", "hybrid_onsite"}:
+    if request.mode not in {"all", "profile_default", "remote", "hybrid", "onsite", "hybrid_onsite"}:
         raise HTTPException(status_code=400, detail="Invalid job mode")
     sources = db.scalars(select(JobSource).where(JobSource.user_id == user.id, JobSource.status == "active")).all()
     domains = [source.domain for source in sources]
@@ -130,14 +132,17 @@ def _search(db: Session, user: User, profile: Profile, request: JobSearchRequest
     profile_terms = _profile_terms(profile)
     cutoff = utcnow() - timedelta(days=request.days) if request.days else None
     search_terms = [query] if query else ([] if request.mode == "all" else profile_terms)
-    filtered, rejected = _filter_jobs(jobs, search_terms, location, request.mode, cutoff)
+    filtered, rejected = _filter_jobs(jobs, search_terms, location, profile.country, request.mode, cutoff)
     match_scope = "profile_and_location"
     if not filtered and not query:
-        filtered, rejected = _filter_jobs(jobs, profile_terms, "", request.mode, cutoff)
+        filtered, rejected = _filter_jobs(jobs, profile_terms, "", profile.country, request.mode, cutoff)
         match_scope = "profile_any_location"
     if not filtered and not query:
-        filtered, rejected = _filter_jobs(jobs, [], location, request.mode, cutoff)
+        filtered, rejected = _filter_jobs(jobs, [], location, profile.country, request.mode, cutoff)
         match_scope = "location_and_mode"
+    if not filtered and not query and profile.country:
+        filtered, rejected = _filter_jobs(jobs, [], "", profile.country, request.mode, cutoff)
+        match_scope = "country_and_mode"
     logger.info("Job filtering: user_id=%s loaded=%s profile_terms=%s location=%s mode=%s scope=%s rejected=%s returned=%s", user.id, len(jobs), len(profile_terms), location or "any", request.mode, match_scope, rejected, len(filtered))
     return JobSearchResponse(jobs=filtered, match_scope=match_scope)
 
@@ -146,20 +151,30 @@ def _filter_jobs(
     jobs: list[Job],
     search_terms: list[str],
     location: str,
+    country: str,
     mode: str,
     cutoff,
 ) -> tuple[list[JobResponse], dict[str, int]]:
     filtered = []
-    rejected = {"terms": 0, "location": 0, "mode": 0, "age": 0}
+    rejected = {"terms": 0, "location": 0, "country": 0, "mode": 0, "age": 0}
     for job in jobs:
         job_text = " ".join([job.title, job.company, job.description]).lower()
         if search_terms and not any(term in job_text for term in search_terms):
             rejected["terms"] += 1
             continue
-        if location and not any(location in item.lower() for item in (job.locations or [])):
+        city_matches = not location or any(location in item.lower() for item in (job.locations or []))
+        if mode != "profile_default" and location and not city_matches:
             rejected["location"] += 1
             continue
-        mode_matches = mode == "all" or mode == job.work_mode or mode == "hybrid_onsite" and job.work_mode in {"hybrid", "onsite"}
+        if country and job.eligible_countries and country.upper() not in job.eligible_countries:
+            rejected["country"] += 1
+            continue
+        mode_matches = (
+            mode == "all"
+            or mode == job.work_mode
+            or mode == "hybrid_onsite" and job.work_mode in {"hybrid", "onsite"}
+            or mode == "profile_default" and (job.work_mode == "remote" or job.work_mode in {"hybrid", "onsite"} and city_matches)
+        )
         if not mode_matches:
             rejected["mode"] += 1
             continue

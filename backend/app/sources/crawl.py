@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import Job, JobSource, utcnow
-from ..logging import logger
+from ..logging import logger, timed
 from ..textnorm import fingerprint
 from .extract import extract_jsonld
 from .fetch import FetchError, SafeFetcher
@@ -16,6 +16,7 @@ from .posting import Posting
 MAX_POSTINGS = 100
 
 
+@timed
 def sitemap_urls(fetcher: SafeFetcher, sitemap_url: str) -> list[tuple[str, str | None]]:
     result = fetcher.get(sitemap_url, sitemap=True)
     root = ET.fromstring(result.content)
@@ -36,6 +37,7 @@ def sitemap_urls(fetcher: SafeFetcher, sitemap_url: str) -> list[tuple[str, str 
     return urls
 
 
+@timed
 def refresh_source(db: Session, source: JobSource) -> dict[str, int | str]:
     logger.info("Crawl started: source=%s status=%s sitemap=%s", source.domain, source.status, bool(source.sitemap_url))
     fetcher = SafeFetcher(source.domain)

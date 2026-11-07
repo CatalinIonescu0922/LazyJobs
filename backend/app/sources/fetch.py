@@ -8,6 +8,7 @@ from urllib.robotparser import RobotFileParser
 import httpx
 
 from ..config import settings
+from ..logging import logger, timed
 
 MAX_PAGE_BYTES = 5 * 1024 * 1024
 MAX_SITEMAP_BYTES = 20 * 1024 * 1024
@@ -32,6 +33,7 @@ class SafeFetcher:
         self._robots: dict[str, RobotFileParser] = {}
         self._last_request: dict[str, float] = {}
 
+    @timed
     def get(self, url: str, *, sitemap: bool = False) -> FetchResult:
         current = _validate_url(url)
         for _ in range(MAX_REDIRECTS + 1):
@@ -60,7 +62,9 @@ class SafeFetcher:
             limit = MAX_SITEMAP_BYTES if sitemap else MAX_PAGE_BYTES
             if len(response.content) > limit:
                 raise FetchError("response was too large")
-            return FetchResult(current, response.status_code, response.content, response.headers.get("content-type", ""))
+            result = FetchResult(current, response.status_code, response.content, response.headers.get("content-type", ""))
+            logger.info("Fetch completed: host=%s url=%s status=%s bytes=%s", host, current, response.status_code, len(response.content))
+            return result
         raise FetchError("too many redirects")
 
     def robots_allowed(self, url: str) -> bool:

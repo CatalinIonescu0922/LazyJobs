@@ -45,3 +45,9 @@ adapters in Phase 8. A custom page that is mostly a JavaScript shell is marked `
 browser rendering` instead of being reported as an empty source. Playwright is the right
 open-source renderer for that next adapter, and it must retain the same HTTPS, robots,
 host, DNS, redirect, and response-size guards as `SafeFetcher`.
+
+Crawler timings are written to `backend/logs/app.log`. Timed entries include
+`function=... time_taken_ms=...`; fetch entries also include the URL and response bytes,
+and career discovery entries include the number of pages and queued links. This makes
+network politeness, over-discovery, extraction, and database work distinguishable without
+adding a separate profiling system.

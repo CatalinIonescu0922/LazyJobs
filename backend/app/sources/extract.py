@@ -7,10 +7,12 @@ import pycountry
 from bs4 import BeautifulSoup
 
 from .posting import Posting
+from ..logging import timed
 
 _REMOTE_WORDS = ("remote", "de acasa", "de acasă", "telemunca", "tele­munca", "hibrid")
 
 
+@timed
 def extract_jsonld(html: bytes | str, *, url: str, source: str) -> Posting | None:
     soup = BeautifulSoup(html, "html.parser")
     for node in soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}):

@@ -7,7 +7,7 @@ import { Job, JobFilters, listJobs, logout, meQuery, profileQuery } from "../api
 const defaultFilters: JobFilters = {
   query: "",
   location: "",
-  mode: "hybrid_onsite",
+  mode: "profile_default",
   days: null,
 };
 
@@ -72,7 +72,8 @@ export default function Home() {
         <form onSubmit={submit} className="mb-8 grid gap-3 border border-white/10 bg-white/[0.06] p-4 sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto_auto_auto]">
           <input value={filters.query ?? ""} onChange={(event) => setFilters({ ...filters, query: event.target.value })} placeholder="Search title, skill, or company" className="rounded-md border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none placeholder:text-slate-500 focus:border-teal-400" />
           <input value={filters.location ?? ""} onChange={(event) => setFilters({ ...filters, location: event.target.value })} placeholder={profile.data?.city || "City or location"} className="rounded-md border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none placeholder:text-slate-500 focus:border-teal-400" />
-          <select value={filters.mode ?? "hybrid_onsite"} onChange={(event) => setFilters({ ...filters, mode: event.target.value })} className="rounded-md border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none focus:border-teal-400">
+          <select value={filters.mode ?? "profile_default"} onChange={(event) => setFilters({ ...filters, mode: event.target.value })} className="rounded-md border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none focus:border-teal-400">
+            <option value="profile_default">Remote country + city roles</option>
             <option value="hybrid_onsite">Hybrid + onsite</option>
             <option value="remote">Remote</option>
             <option value="hybrid">Hybrid</option>
@@ -80,10 +81,10 @@ export default function Home() {
             <option value="all">All modes</option>
           </select>
           <select value={filters.days ?? ""} onChange={(event) => setFilters({ ...filters, days: event.target.value ? Number(event.target.value) : null })} className="rounded-md border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none focus:border-teal-400">
-            <option value="">Any age</option>
-            <option value="1">Past day</option>
-            <option value="7">Past week</option>
-            <option value="30">Past month</option>
+            <option value="" disabled>Date Posted</option>
+            <option value="1">Last day</option>
+            <option value="7">Last week</option>
+            <option value="30">Last month</option>
           </select>
           <button type="submit" className="rounded-md bg-teal-400 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-teal-300">Search</button>
           <button type="button" onClick={() => { const allFilters = { query: "", location: "", mode: "all", days: null }; setFilters(allFilters); setSubmitted(allFilters); }} className="rounded-md border border-white/15 px-4 py-2.5 text-sm text-slate-200 hover:bg-white/10">Show all jobs</button>
