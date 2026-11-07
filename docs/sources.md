@@ -51,3 +51,10 @@ Crawler timings are written to `backend/logs/app.log`. Timed entries include
 and career discovery entries include the number of pages and queued links. This makes
 network politeness, over-discovery, extraction, and database work distinguishable without
 adding a separate profiling system.
+
+Independent sources refresh through a bounded worker pool (`CRAWL_WORKERS`, default 6),
+while a shared per-host limiter still honors the configured delay and any `Crawl-delay`
+or `Retry-After` response. Successful responses are cached briefly and reused with
+`ETag`/`Last-Modified` validators when available. Workers use separate database sessions;
+source completion events are collected centrally so one failed source does not cancel the
+others.

@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from datetime import timedelta
 from urllib.parse import urlparse
@@ -7,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..db import get_db
+from ..config import settings
+from ..db import SessionLocal, get_db
 from ..llm import propose_employers, propose_job_boards
 from ..logging import logger, timed
 from ..models import Job, JobSource, Profile, User, utcnow
@@ -105,17 +107,39 @@ def _refresh_user_sources_locked(db: Session, user: User, profile: Profile) -> N
         if source.status == "active" or refresh_candidates
     ]
     logger.info("Job refresh plan: user_id=%s refresh_count=%s skipped_failed=%s", user.id, len(sources_to_refresh), len(sources) - len(sources_to_refresh))
-    for source in sources_to_refresh:
-        try:
-            result = refresh_career_source(db, source, profile.country, profile.city) if source.kind in {"career", "employer"} else refresh_source(db, source)
-            logger.info("Job source refreshed: user_id=%s source=%s status=%s added=%s failed=%s posting_count=%s", user.id, source.domain, result["status"], result["added"], result["failed"], source.posting_count)
-        except Exception as exc:
-            db.rollback()
+    with ThreadPoolExecutor(max_workers=settings.crawl_workers, thread_name_prefix="source-refresh") as executor:
+        futures = {
+            executor.submit(_refresh_one_source, source.id, profile.country, profile.city): source.domain
+            for source in sources_to_refresh
+        }
+        for future in as_completed(futures):
+            domain = futures[future]
+            try:
+                result = future.result()
+                logger.info("Job source refreshed: user_id=%s source=%s status=%s added=%s failed=%s posting_count=%s", user.id, domain, result["status"], result["added"], result["failed"], result["posting_count"])
+            except Exception:
+                logger.exception("Automatic job refresh failed for source=%s", domain)
+    logger.info("Job refresh completed: user_id=%s active_sources=%s", user.id, sum(source.status == "active" for source in sources))
+
+
+def _refresh_one_source(source_id: int, country: str, city: str) -> dict[str, int | str]:
+    db = SessionLocal()
+    try:
+        source = db.get(JobSource, source_id)
+        if source is None:
+            raise RuntimeError(f"source {source_id} disappeared")
+        result = refresh_career_source(db, source, country, city) if source.kind in {"career", "employer"} else refresh_source(db, source)
+        return {**result, "posting_count": source.posting_count}
+    except Exception as exc:
+        db.rollback()
+        source = db.get(JobSource, source_id)
+        if source is not None:
             source.status = "failed"
             source.reason = str(exc)[:500] or "source refresh failed"
             db.commit()
-            logger.exception("Automatic job refresh failed for source=%s", source.domain)
-    logger.info("Job refresh completed: user_id=%s active_sources=%s", user.id, sum(source.status == "active" for source in sources))
+        raise
+    finally:
+        db.close()
 
 
 @timed
