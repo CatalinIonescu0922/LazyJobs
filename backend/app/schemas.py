@@ -116,3 +116,35 @@ class SourceRefreshResponse(BaseModel):
     updated: int
     failed: int
     reason: str = ""
+
+
+class JobSearchRequest(BaseModel):
+    query: str = ""
+    location: str = ""
+    mode: str = "hybrid_onsite"
+    days: int | None = Field(default=None, ge=1, le=365)
+    refresh: bool = False
+
+
+class JobResponse(BaseModel):
+    id: int
+    title: str
+    company: str
+    logo_url: str
+    locations: list[str]
+    work_mode: str
+    experience_level: str | None
+    employment_type: str
+    description: str
+    url: str
+    apply_url: str
+    posted_at: datetime | None
+    salary_min: int | None
+    salary_max: int | None
+    salary_currency: str
+    source: str
+
+
+class JobSearchResponse(BaseModel):
+    jobs: list[JobResponse]
+    refreshed: bool = False

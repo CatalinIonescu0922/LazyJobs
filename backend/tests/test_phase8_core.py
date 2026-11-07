@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from app import llm
@@ -43,6 +44,17 @@ def test_fetch_rejects_private_dns():
     with patch("app.sources.fetch.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("169.254.169.254", 443))]):
         with pytest.raises(FetchError, match="blocked"):
             SafeFetcher("example.com").get("https://example.com/jobs/1")
+
+
+def test_robots_parser_accepts_httpx_response_url():
+    response = httpx.Response(
+        200,
+        text="User-agent: *\nAllow: /\n",
+        request=httpx.Request("GET", "https://example.com/robots.txt"),
+    )
+    fetcher = SafeFetcher("example.com")
+    with patch.object(fetcher, "_fetch_robots", return_value=response):
+        assert fetcher._allowed("https://example.com/jobs/1", "example.com")
 
 
 def test_extract_profile_retries_a_transient_vertex_failure():

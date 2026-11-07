@@ -75,7 +75,7 @@ class SafeFetcher:
             if response.status_code in {401, 403, 429}:
                 raise FetchError("disallowed by robots.txt")
             parser = RobotFileParser()
-            parser.set_url(response.url)
+            parser.set_url(str(response.url))
             parser.parse(response.text.splitlines() if response.status_code < 400 else [])
             self._robots[host] = parser
         return self._robots[host].can_fetch(settings.user_agent, url)

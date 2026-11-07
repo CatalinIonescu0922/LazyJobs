@@ -115,6 +115,7 @@ def _upsert_job(db: Session, posting: Posting) -> None:
         "company": posting.company,
         "locations": posting.locations,
         "remote": posting.remote,
+        "work_mode": posting.work_mode,
         "eligible_countries": posting.eligible_countries,
         "employment_type": posting.employment_type,
         "description": posting.description,

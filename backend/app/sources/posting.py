@@ -12,6 +12,7 @@ class Posting:
     company: str
     locations: list[str]
     remote: bool
+    work_mode: str
     eligible_countries: list[str]
     employment_type: str
     description: str

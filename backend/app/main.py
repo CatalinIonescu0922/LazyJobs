@@ -6,6 +6,7 @@ from starlette.responses import Response
 from .config import settings
 from .logging import logger
 from .routers.auth import router as auth_router
+from .routers.jobs import router as jobs_router
 from .routers.profile import router as profile_router
 from .routers.sources import router as sources_router
 
@@ -31,6 +32,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(jobs_router)
 app.include_router(profile_router)
 app.include_router(sources_router)
 

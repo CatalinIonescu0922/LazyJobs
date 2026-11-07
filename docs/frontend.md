@@ -31,6 +31,12 @@ page. Users without an uploaded CV are sent to `/profile` to complete initial se
 users whose profile has `has_cv` set continue to `/` as the main page. The profile page
 remains available for later corrections.
 
+The main page is the job results view. The first CV upload automatically discovers and
+refreshes the user's sources, then opens the dashboard with roles filtered to hybrid and
+onsite work in the profile city. The dashboard provides manual keyword, location, work
+mode, and posted-date filters over cached results. `/sources` remains an advanced
+source-management screen rather than part of the normal first-login workflow.
+
 ## Contracts
 
 - `api(path, init)` always sends `credentials: "include"`. A non-2xx response throws

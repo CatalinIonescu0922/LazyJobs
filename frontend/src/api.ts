@@ -69,6 +69,37 @@ export type Source = {
   last_refreshed_at: string | null;
 };
 
+export type Job = {
+  id: number;
+  title: string;
+  company: string;
+  logo_url: string;
+  locations: string[];
+  work_mode: string;
+  experience_level: string | null;
+  employment_type: string;
+  description: string;
+  url: string;
+  apply_url: string;
+  posted_at: string | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string;
+  source: string;
+};
+
+export type JobFilters = {
+  query?: string;
+  location?: string;
+  mode?: string;
+  days?: number | null;
+};
+
+export type JobSearchResult = {
+  jobs: Job[];
+  refreshed: boolean;
+};
+
 // A 401 means signed out, which is an answer, not a failure worth retrying.
 export const meQuery = queryOptions({
   queryKey: ["me"],
@@ -110,6 +141,24 @@ export function updateSource(id: number, enabled: boolean): Promise<Source> {
 
 export function refreshSource(id: number): Promise<{ added: number; failed: number; status: string }> {
   return api(`/api/sources/${id}/refresh`, { method: "POST" });
+}
+
+export function listJobs(filters: JobFilters = {}): Promise<JobSearchResult> {
+  const params = new URLSearchParams();
+  if (filters.query) params.set("query", filters.query);
+  if (filters.location) params.set("location", filters.location);
+  if (filters.mode) params.set("mode", filters.mode);
+  if (filters.days) params.set("days", String(filters.days));
+  const suffix = params.toString();
+  return api<JobSearchResult>(`/api/jobs${suffix ? `?${suffix}` : ""}`);
+}
+
+export function searchJobs(filters: JobFilters = {}): Promise<JobSearchResult> {
+  return api<JobSearchResult>("/api/jobs/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...filters, refresh: true }),
+  });
 }
 
 export type ProfileUpdate = Omit<

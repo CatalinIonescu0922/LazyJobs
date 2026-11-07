@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   ProfileUpdate,
   profileQuery,
+  searchJobs,
   updateProfile,
   uploadCv,
 } from "../api";
@@ -66,11 +67,26 @@ export default function Profile() {
     },
   });
 
+  const automaticSearch = useMutation({
+    mutationFn: () => searchJobs({ mode: "hybrid_onsite" }),
+    onSuccess: (result) => {
+      queryClient.setQueryData(
+        ["jobs", { query: "", location: "", mode: "hybrid_onsite", days: null }],
+        result,
+      );
+      navigate("/", { replace: true });
+    },
+    onError: (error) => {
+      setMessage(error instanceof Error ? `CV saved, but job search failed: ${error.message}` : "CV saved, but job search failed");
+    },
+  });
+
   const upload = useMutation({
     mutationFn: uploadCv,
     onSuccess: (saved) => {
       queryClient.setQueryData(profileQuery.queryKey, saved);
       setMessage("CV uploaded and profile extracted");
+      automaticSearch.mutate();
     },
   });
 
@@ -143,12 +159,12 @@ export default function Profile() {
               </p>
             </div>
             <label className="cursor-pointer rounded-md bg-teal-700 px-4 py-2 text-sm font-medium text-white hover:bg-teal-800">
-              {upload.isPending ? "Extracting..." : "Upload CV"}
+              {upload.isPending ? "Extracting..." : automaticSearch.isPending ? "Finding jobs..." : "Upload CV"}
               <input
                 type="file"
                 accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 onChange={chooseFile}
-                disabled={upload.isPending}
+                disabled={upload.isPending || automaticSearch.isPending}
                 className="sr-only"
               />
             </label>

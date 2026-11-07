@@ -60,7 +60,14 @@ def _posting_from_job(job: dict, *, url: str, source: str) -> Posting:
     title = _clean(job.get("title"))
     company = job.get("hiringOrganization", {})
     company = company.get("name", "") if isinstance(company, dict) else str(company or "")
-    remote = str(job.get("jobLocationType", "")).upper() == "TELECOMMUTE" or any(word in _plain(" ".join([title, description, *locations])) for word in _REMOTE_WORDS)
+    searchable_text = _plain(" ".join([title, description, *locations]))
+    if "hibrid" in searchable_text or "hybrid" in searchable_text:
+        work_mode = "hybrid"
+    elif str(job.get("jobLocationType", "")).upper() == "TELECOMMUTE" or any(word in searchable_text for word in _REMOTE_WORDS):
+        work_mode = "remote"
+    else:
+        work_mode = "onsite"
+    remote = work_mode in {"remote", "hybrid"}
     salary_min, salary_max, currency = _salary(job.get("baseSalary"))
     return Posting(
         source=source,
@@ -79,6 +86,7 @@ def _posting_from_job(job: dict, *, url: str, source: str) -> Posting:
         salary_currency=currency,
         posted_at=_date(job.get("datePosted")),
         expires_at=_date(job.get("validThrough")),
+        work_mode=work_mode,
     )
 
 

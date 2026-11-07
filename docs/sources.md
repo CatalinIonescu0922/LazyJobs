@@ -14,8 +14,9 @@ stored in `job_sources`; the crawler reads sitemap URLs and extracts schema.org
 - `PATCH /api/sources/{id}` enables or disables a source.
 
 A candidate becomes active only after robots.txt, sitemap, and at least two JSON-LD posting
-samples pass. A failed source retains a plain-language reason. The Sources screen refreshes
-one board at a time.
+samples pass. A failed source retains a plain-language reason. The normal dashboard
+refreshes the user's sources automatically after the first CV upload; the Sources screen
+remains available for advanced management and recovery.
 
 ## Safety rules
 

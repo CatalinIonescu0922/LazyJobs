@@ -82,6 +82,7 @@ class Job(Base):
     company: Mapped[str] = mapped_column(String(255), default="")
     locations: Mapped[list] = mapped_column(JSON, default=list)
     remote: Mapped[bool] = mapped_column(Boolean, default=False)
+    work_mode: Mapped[str] = mapped_column(String(16), default="unknown")
     employment_type: Mapped[str] = mapped_column(String(64), default="")
     description: Mapped[str] = mapped_column(Text, default="")
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
