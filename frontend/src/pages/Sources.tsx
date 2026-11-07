@@ -27,6 +27,14 @@ export default function Sources() {
     },
     onError: (error) => setMessage(error instanceof Error ? error.message : "Board discovery failed"),
   });
+  const discoverEmployers = useMutation({
+    mutationFn: () => discoverSources("employers"),
+    onSuccess: (result) => {
+      setMessage(`${result.created} employer source${result.created === 1 ? "" : "s"} added`);
+      invalidate();
+    },
+    onError: (error) => setMessage(error instanceof Error ? error.message : "Employer discovery failed"),
+  });
   const add = useMutation({
     mutationFn: () => addSource(sourceUrl),
     onSuccess: () => {
@@ -69,6 +77,9 @@ export default function Sources() {
         <section className="mb-6 flex flex-wrap gap-3 border border-slate-200 bg-white p-5 shadow-sm">
           <button type="button" onClick={() => discover.mutate()} disabled={discover.isPending || !profile.data?.country} className="rounded-md bg-teal-700 px-4 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50">
             {discover.isPending ? "Finding boards..." : profile.data?.country ? `Find boards for ${profile.data.country}` : "Set country in Profile"}
+          </button>
+          <button type="button" onClick={() => discoverEmployers.mutate()} disabled={discoverEmployers.isPending || !profile.data?.country || !profile.data?.city} className="rounded-md border border-teal-700 px-4 py-2 text-sm font-medium text-teal-800 hover:bg-teal-50 disabled:opacity-50">
+            {discoverEmployers.isPending ? "Finding employers..." : "Find local employers"}
           </button>
           <form onSubmit={(event) => { event.preventDefault(); if (sourceUrl.trim()) add.mutate(); }} className="flex min-w-[280px] flex-1 gap-2">
             <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="Add a company careers URL" className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />

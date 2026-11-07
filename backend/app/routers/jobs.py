@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..llm import propose_job_boards
+from ..llm import propose_employers, propose_job_boards
 from ..logging import logger
 from ..models import Job, JobSource, Profile, User, utcnow
 from ..schemas import JobResponse, JobSearchRequest, JobSearchResponse
@@ -84,6 +84,20 @@ def _refresh_user_sources_locked(db: Session, user: User, profile: Profile) -> N
             sources.append(existing)
         db.commit()
         logger.info("Job sources discovered: user_id=%s source_count=%s", user.id, len(sources))
+    if profile.city and not any(source.kind == "employer" for source in sources):
+        for proposal in propose_employers(profile.country, profile.city, profile.titles, profile.skills):
+            source_url = _source_url(str(proposal.get("website", "")))
+            domain = _domain(source_url)
+            if not domain:
+                continue
+            existing = db.scalar(select(JobSource).where(JobSource.user_id == user.id, JobSource.domain == domain, JobSource.kind == "employer"))
+            if existing is None:
+                existing = JobSource(user_id=user.id, domain=domain, source_url=source_url, kind="employer")
+                db.add(existing)
+                db.flush()
+            sources.append(existing)
+        db.commit()
+        logger.info("Employer sources discovered: user_id=%s source_count=%s", user.id, sum(source.kind == "employer" for source in sources))
     refresh_candidates = not any(source.status == "active" for source in sources)
     sources_to_refresh = [
         source for source in sources
@@ -92,7 +106,7 @@ def _refresh_user_sources_locked(db: Session, user: User, profile: Profile) -> N
     logger.info("Job refresh plan: user_id=%s refresh_count=%s skipped_failed=%s", user.id, len(sources_to_refresh), len(sources) - len(sources_to_refresh))
     for source in sources_to_refresh:
         try:
-            result = refresh_career_source(db, source) if source.kind == "career" else refresh_source(db, source)
+            result = refresh_career_source(db, source) if source.kind in {"career", "employer"} else refresh_source(db, source)
             logger.info("Job source refreshed: user_id=%s source=%s status=%s added=%s failed=%s posting_count=%s", user.id, source.domain, result["status"], result["added"], result["failed"], source.posting_count)
         except Exception as exc:
             db.rollback()
@@ -204,3 +218,13 @@ def _domain(value: str) -> str:
         return ""
     parsed = urlparse(value if "://" in value else f"https://{value}")
     return (parsed.hostname or "").lower().removeprefix("www.")
+
+
+def _source_url(value: str) -> str:
+    value = value.strip()
+    if "://" not in value:
+        value = f"https://{value}"
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        return ""
+    return value

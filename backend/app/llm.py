@@ -99,6 +99,21 @@ general search engine, or site whose job search requires login or blocks ordinar
     return _json_call(prompt, {"type": "array", "items": {"type": "object", "properties": {"domain": {"type": "string"}, "kind": {"type": "string"}}, "required": ["domain", "kind"]}})
 
 
+def propose_employers(country: str, city: str, titles: list[str], skills: list[str]) -> list[dict[str, str]]:
+    if not settings.google_cloud_project:
+        raise HTTPException(status_code=503, detail="Employer discovery is not configured")
+    prompt = f"""Find up to 15 real employers with public careers pages in or hiring for {city}, {country}.
+Prioritize employers likely to hire for these candidate titles: {", ".join(titles[:10])}.
+Use these skills as additional signals: {", ".join(skills[:20])}.
+Return only JSON array objects with company and website. Website must be the employer's
+own HTTPS home page or careers page, never a job board, staffing agency, social network,
+search engine, or invented domain. Prefer employers with a public careers page."""
+    return _json_call(
+        prompt,
+        {"type": "array", "items": {"type": "object", "properties": {"company": {"type": "string"}, "website": {"type": "string"}}, "required": ["company", "website"]}},
+    )
+
+
 def pick_posting_sitemaps(samples: list[str]) -> dict[str, str]:
     if not settings.google_cloud_project:
         return {"prefix": ""}

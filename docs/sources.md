@@ -12,6 +12,9 @@ stored in `job_sources`; the crawler reads sitemap URLs and extracts schema.org
 - `POST /api/sources` also accepts a full HTTPS career-page URL. These `career` sources
   fetch the supplied page and same-domain career/job links, then extract `JobPosting`
   JSON-LD.
+- `POST /api/sources/discover?kind=employers` asks Vertex for up to 15 employers in the
+  profile city and country using the candidate's titles and skills, then stores their
+  websites as `employer` sources for career-page crawling.
 - `POST /api/sources/{id}/refresh` validates a candidate, then reads up to 100 sitemap
   entries and upserts postings.
 - `PATCH /api/sources/{id}` enables or disables a source.

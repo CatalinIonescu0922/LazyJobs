@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import type { FormEventHandler } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { Job, JobFilters, listJobs, logout, meQuery, profileQuery } from "../api";
@@ -37,10 +38,10 @@ export default function Home() {
       navigate("/sign-in", { replace: true });
     },
   });
-  function submit(event: FormEvent<HTMLFormElement>) {
+  const submit: FormEventHandler<HTMLFormElement> = (event) => {
     event.preventDefault();
     setSubmitted({ ...filters });
-  }
+  };
 
   if (!me) return null;
 

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..llm import propose_job_boards
+from ..llm import propose_employers, propose_job_boards
 from ..models import JobSource, Profile, User
 from ..schemas import SourceCreate, SourceDiscoveryResponse, SourceResponse, SourceRefreshResponse, SourceUpdate
 from ..session import current_user
@@ -47,25 +47,33 @@ def add_source(payload: SourceCreate, user: User = Depends(current_user), db: Se
 
 @router.post("/discover", response_model=SourceDiscoveryResponse)
 def discover_sources(kind: str = "boards", user: User = Depends(current_user), db: Session = Depends(get_db)):
-    if kind != "boards":
-        raise HTTPException(status_code=400, detail="Phase 8 supports board discovery only")
     profile = db.scalar(select(Profile).where(Profile.user_id == user.id))
     if not profile or not profile.country:
-        raise HTTPException(status_code=400, detail="Set your profile country before discovering boards")
-    proposals = propose_job_boards(profile.country)
+        raise HTTPException(status_code=400, detail="Set your profile country before discovering sources")
+    if kind == "boards":
+        proposals = propose_job_boards(profile.country)
+    elif kind == "employers":
+        if not profile.city:
+            raise HTTPException(status_code=400, detail="Set your profile city before discovering employers")
+        proposals = propose_employers(profile.country, profile.city, profile.titles, profile.skills)
+    else:
+        raise HTTPException(status_code=400, detail="Unknown source discovery type")
     created = 0
     for proposal in proposals:
         try:
-            domain = _domain(proposal.get("domain", ""))
+            value = proposal.get("domain", "") if kind == "boards" else proposal.get("website", "")
+            source_url = _source_url(value)
+            domain = _domain(source_url)
         except HTTPException:
             continue
         if not domain:
             continue
         if _is_unsupported(domain):
             continue
-        existing = db.scalar(select(JobSource).where(JobSource.user_id == user.id, JobSource.domain == domain, JobSource.kind == "board"))
+        source_kind = "board" if kind == "boards" else "employer"
+        existing = db.scalar(select(JobSource).where(JobSource.user_id == user.id, JobSource.domain == domain, JobSource.kind == source_kind))
         if existing is None:
-            db.add(JobSource(user_id=user.id, domain=domain, kind="board"))
+            db.add(JobSource(user_id=user.id, domain=domain, source_url=source_url, kind=source_kind))
             created += 1
     db.commit()
     return SourceDiscoveryResponse(created=created, proposed=len(proposals))
@@ -97,7 +105,7 @@ def refresh(source_id: int, user: User = Depends(current_user), db: Session = De
             failed=0,
             reason=source.reason,
         )
-    result = refresh_career_source(db, source) if source.kind == "career" else refresh_source(db, source)
+    result = refresh_career_source(db, source) if source.kind in {"career", "employer"} else refresh_source(db, source)
     return SourceRefreshResponse.model_validate(result)
 
 
