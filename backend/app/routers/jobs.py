@@ -136,7 +136,7 @@ def _refresh_one_source(source_id: int, country: str, city: str, terms: list[str
         source = db.get(JobSource, source_id)
         if source is not None:
             source.status = "failed"
-            source.reason = str(exc)[:500] or "source refresh failed"
+            source.reason = f"unexpected error: {type(exc).__name__}: {str(exc)[:300]}"
             db.commit()
         raise
     finally:
