@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from app.models import JobSource
 from app.sources import crawl
 from app.sources.fetch import FetchError, FetchResult
+from app.sources.posting import Posting
 
 NS = 'xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"'
 POSTING_PAGE = b'<script type="application/ld+json">{"@type":"JobPosting","title":"DevOps Engineer","description":"<p>Run CI</p>","hiringOrganization":{"name":"Acme"}}</script>'
@@ -205,3 +207,92 @@ def test_career_failure_reason_names_an_unsupported_ats_and_a_rejected_linked_fe
     assert _failure_reason([("https://atos.example/", page)]) == "careers site uses SuccessFactors, which is not supported yet"
     workday = b'<a href="https://flextronics.wd1.myworkdayjobs.com/Careers">Jobs</a>'
     assert _failure_reason([("https://flex.example/", workday)]) == "linked Workday feed has no posting in your country or cannot be read"
+
+
+def make_posting(url: str, source: str = "board.ro") -> Posting:
+    return Posting(
+        source=source, external_id=url, url=url, apply_url=url, title="DevOps Engineer", company="Acme", locations=["Timisoara"],
+        remote=False, work_mode="onsite", eligible_countries=["RO"], employment_type="", description="Run CI for a large team of engineers.",
+        salary_min=None, salary_max=None, salary_currency="", posted_at=None, expires_at=None,
+    )
+
+
+def test_modified_ignores_placeholder_and_malformed_dates():
+    assert crawl._modified("2026-11-08") is not None
+    assert crawl._modified("2026-11-08T10:00:00+02:00") is not None
+    assert crawl._modified("1970-01-01T00:00:00+00:00") is None
+    assert crawl._modified("0001-01-01") is None
+    assert crawl._modified("garbage") is None
+    assert crawl._modified(None) is None
+
+
+def test_recent_drops_old_entries_but_keeps_undated_ones():
+    today = date.today().isoformat()
+    old = (date.today() - timedelta(days=crawl.MAX_AGE_DAYS + 5)).isoformat()
+    entries = [("https://x.ro/a", today), ("https://x.ro/b", old), ("https://x.ro/c", None), ("https://x.ro/d", "1970-01-01T00:00:00+00:00")]
+    assert [url for url, _ in crawl._recent(entries)] == ["https://x.ro/a", "https://x.ro/c", "https://x.ro/d"]
+
+
+def test_validation_refuses_a_sitemap_of_only_old_postings():
+    old = (date.today() - timedelta(days=crawl.MAX_AGE_DAYS + 30)).isoformat()
+    postings = [f"https://board.ro/locuri/{n}/role" for n in range(6)]
+    body = f"<urlset {NS}>{''.join(f'<url><loc>{url}</loc><lastmod>{old}</lastmod></url>' for url in postings)}</urlset>".encode()
+    source, fetcher = validate({"https://board.ro/sitemap.xml": body, **{url: POSTING_PAGE for url in postings}})
+    assert source.status == "failed"
+    assert source.reason == f"sitemap has no postings from the last {crawl.MAX_AGE_DAYS} days"
+    assert fetcher.requested == ["https://board.ro/sitemap.xml"]
+
+
+def llm_pages(count: int = 6) -> dict[str, bytes]:
+    urls = [f"https://board.ro/loc-de-munca/job-{n}" for n in range(count)]
+    return {"https://board.ro/sitemap.xml": urlset(*urls), **{url: LANDING_PAGE for url in urls}}
+
+
+def test_validation_falls_back_to_the_model_when_pages_have_no_json_ld():
+    fake = MagicMock(side_effect=lambda content, *, url, source: make_posting(url))
+    with patch.object(crawl, "extract_llm", fake), patch.object(crawl.settings, "google_cloud_project", "project"):
+        source, _ = validate(llm_pages())
+    assert (source.status, source.extraction) == ("active", "llm")
+    assert source.posting_prefix == "https://board.ro/loc-de-munca/"
+    assert fake.call_count == crawl.SAMPLES
+
+
+def test_validation_does_not_ask_the_model_when_json_ld_works():
+    urls = [f"https://board.ro/locuri/{n}/role" for n in range(6)]
+    pages = {"https://board.ro/sitemap.xml": urlset(*urls), **{url: POSTING_PAGE for url in urls}}
+    fake = MagicMock()
+    with patch.object(crawl, "extract_llm", fake), patch.object(crawl.settings, "google_cloud_project", "project"):
+        source, _ = validate(pages)
+    assert (source.status, source.extraction) == ("active", "jsonld")
+    fake.assert_not_called()
+
+
+def test_validation_does_not_ask_the_model_when_it_is_not_configured():
+    fake = MagicMock()
+    with patch.object(crawl, "extract_llm", fake), patch.object(crawl.settings, "google_cloud_project", ""):
+        source, _ = validate(llm_pages())
+    assert source.status == "failed"
+    assert source.reason == "job pages have no JobPosting data"
+    fake.assert_not_called()
+
+
+def test_validation_says_when_the_model_found_no_posting_either():
+    with patch.object(crawl, "extract_llm", MagicMock(return_value=None)), patch.object(crawl.settings, "google_cloud_project", "project"):
+        source, _ = validate(llm_pages())
+    assert source.status == "failed"
+    assert source.reason == "job pages have no JobPosting data and the model found no posting in them"
+
+
+def test_refresh_of_a_model_read_source_stops_at_the_lower_cap():
+    urls = [f"https://board.ro/loc-de-munca/job-{n}" for n in range(crawl.MAX_LLM_POSTINGS + 20)]
+    fetcher = FakeFetcher({"https://board.ro/sitemap.xml": urlset(*urls), **{url: LANDING_PAGE for url in urls}})
+    source = JobSource(id=1, domain="board.ro", sitemap_url="https://board.ro/sitemap.xml", kind="board", status="active", reason="", extraction="llm", posting_prefix="https://board.ro/loc-de-munca/")
+    db = MagicMock()
+    db.scalars.return_value = []
+    db.scalar.return_value = None
+    fake = MagicMock(side_effect=lambda content, *, url, source: make_posting(url))
+    with patch.object(crawl, "SafeFetcher", return_value=fetcher), patch.object(crawl, "extract_llm", fake):
+        result = crawl.refresh_source(db, source, [])
+    assert result["added"] == crawl.MAX_LLM_POSTINGS
+    assert fake.call_count == crawl.MAX_LLM_POSTINGS
+    assert len(fetcher.requested) == 1 + crawl.MAX_LLM_POSTINGS

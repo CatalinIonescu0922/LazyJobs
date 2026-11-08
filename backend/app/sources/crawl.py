@@ -1,21 +1,26 @@
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import date, timedelta
 from urllib.parse import urldefrag, urlparse
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..llm import pick_sitemaps
 from ..logging import logger, timed
 from ..models import Job, JobSource, utcnow
 from ..textnorm import fingerprint
 from .extract import extract_jsonld
 from .fetch import FetchError, SafeFetcher
+from .llm_extract import extract_llm
 from .posting import Posting
 
 MAX_POSTINGS = 100
+MAX_LLM_POSTINGS = 30
+MAX_AGE_DAYS = 180
 MAX_JOB_SITEMAPS = 5
 MAX_PROBED_SITEMAPS = 4
 MAX_PAGE_GROUPS = 2
@@ -90,6 +95,20 @@ def _posting_entries(fetcher: SafeFetcher, source: JobSource, terms: list[str]) 
     return entries
 
 
+def _modified(lastmod: str | None) -> date | None:
+    try:
+        day = date.fromisoformat((lastmod or "")[:10])
+    except ValueError:
+        return None
+    # Sitemaps without a real date say 1970 or 0001.
+    return day if day.year >= 2000 else None
+
+
+def _recent(entries: list[Entry]) -> list[Entry]:
+    cutoff = date.today() - timedelta(days=MAX_AGE_DAYS)
+    return [entry for entry in entries if (modified := _modified(entry[1])) is None or modified >= cutoff]
+
+
 def _rank(entries: list[Entry], terms: list[str]) -> list[Entry]:
     words = {word for term in terms for word in re.findall(r"[a-z0-9]{4,}", term.lower())}
     # Relevance only reorders the freshest window. Some sitemaps carry no real lastmod
@@ -111,11 +130,12 @@ def refresh_source(db: Session, source: JobSource, terms: list[str] | None = Non
 
     entries = _posting_entries(fetcher, source, terms)
     stored = set(db.scalars(select(Job.external_id).where(Job.source == source.domain)))
-    fresh = list(dict.fromkeys(entry for entry in entries if entry[0].startswith(source.posting_prefix) and urldefrag(entry[0])[0] not in stored))
+    fresh = list(dict.fromkeys(entry for entry in _recent(entries) if entry[0].startswith(source.posting_prefix) and urldefrag(entry[0])[0] not in stored))
+    extractor, cap = (extract_llm, MAX_LLM_POSTINGS) if source.extraction == "llm" else (extract_jsonld, MAX_POSTINGS)
     added = failed = 0
-    for url, _ in _rank(fresh, terms)[:MAX_POSTINGS]:
+    for url, _ in _rank(fresh, terms)[:cap]:
         try:
-            posting = extract_jsonld(fetcher.get(url).content, url=url, source=source.domain)
+            posting = extractor(fetcher.get(url).content, url=url, source=source.domain)
         except FetchError:
             failed += 1
             continue
@@ -142,27 +162,46 @@ def validate_source(db: Session, source: JobSource) -> None:
         root = source.sitemap_url or discover_sitemap(fetcher, source.domain)
         children, entries = read_sitemap(fetcher, root)
         failure = FetchError("no job sitemap found")
+        fallback: list[tuple[str, bytes]] = []
         for batch in _candidate_entries(fetcher, entries, children):
-            for group in _page_groups(batch):
+            recent = _recent(batch)
+            if batch and not recent:
+                failure = FetchError(f"sitemap has no postings from the last {MAX_AGE_DAYS} days")
+                continue
+            for group in _page_groups(recent):
                 try:
-                    prefix = _verified_prefix(fetcher, source.domain, group)
+                    samples = _fetch_samples(fetcher, group)
                 except FetchError as exc:
                     failure = exc
                     continue
+                prefix = _prefix_if_postings(samples, extract_jsonld, source.domain)
                 if prefix is not None:
-                    source.sitemap_url = root
-                    source.posting_prefix = prefix
-                    source.extraction = "jsonld"
-                    source.status = "active"
-                    source.reason = ""
-                    db.commit()
+                    _activate(db, source, root, prefix, "jsonld")
                     return
+                fallback = fallback or samples
                 failure = FetchError("job pages have no JobPosting data")
+        # The model is asked only about the first group that had pages but no JSON-LD, so a
+        # hopeless source costs three calls and not one per candidate.
+        if fallback and settings.google_cloud_project:
+            prefix = _prefix_if_postings(fallback, extract_llm, source.domain)
+            if prefix is not None:
+                _activate(db, source, root, prefix, "llm")
+                return
+            failure = FetchError("job pages have no JobPosting data and the model found no posting in them")
         raise failure
     except FetchError as exc:
         source.status = "failed"
         source.reason = str(exc)
         logger.warning("Source validation failed: source=%s reason=%s", source.domain, source.reason)
+    db.commit()
+
+
+def _activate(db: Session, source: JobSource, root: str, prefix: str, extraction: str) -> None:
+    source.sitemap_url = root
+    source.posting_prefix = prefix
+    source.extraction = extraction
+    source.status = "active"
+    source.reason = ""
     db.commit()
 
 
@@ -190,25 +229,28 @@ def _page_groups(entries: list[Entry]) -> list[list[Entry]]:
     return [group for _, group in usable[:MAX_PAGE_GROUPS]]
 
 
-def _verified_prefix(fetcher: SafeFetcher, domain: str, entries: list[Entry]) -> str | None:
+def _fetch_samples(fetcher: SafeFetcher, entries: list[Entry]) -> list[tuple[str, bytes]]:
     pages = [url for url, _ in entries]
     # Spread the samples: the first few entries of a shard can be unrepresentative.
-    samples = pages[:: max(1, (len(pages) - 1) // (SAMPLES - 1))][:SAMPLES]
-    good: list[str] = []
+    urls = pages[:: max(1, (len(pages) - 1) // (SAMPLES - 1))][:SAMPLES]
+    samples: list[tuple[str, bytes]] = []
     error: FetchError | None = None
-    fetched = 0
-    for url in samples:
+    for url in urls:
         try:
-            content = fetcher.get(url).content
+            samples.append((url, fetcher.get(url).content))
         except FetchError as exc:
             error = exc
-            continue
-        fetched += 1
-        posting = extract_jsonld(content, url=url, source=domain)
+    if not samples and error:
+        raise error
+    return samples
+
+
+def _prefix_if_postings(samples: list[tuple[str, bytes]], extractor: Callable[..., Posting | None], domain: str) -> str | None:
+    good = []
+    for url, content in samples:
+        posting = extractor(content, url=url, source=domain)
         if posting and posting.title and posting.description:
             good.append(url)
-    if not fetched and error:
-        raise error
     return _common_prefix(good) if len(good) >= 2 else None
 
 
