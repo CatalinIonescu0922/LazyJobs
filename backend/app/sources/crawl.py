@@ -1,6 +1,6 @@
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urldefrag, urlparse
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -120,12 +120,13 @@ def discover_sitemap(fetcher: SafeFetcher, domain: str) -> str:
 
 
 def _upsert_job(db: Session, posting: Posting) -> None:
+    canonical_external_id = urldefrag(posting.external_id)[0]
     city = posting.locations[0] if posting.locations else ""
-    item = db.scalar(select(Job).where(Job.source == posting.source, Job.external_id == posting.external_id))
+    item = db.scalar(select(Job).where(Job.source == posting.source, Job.external_id == canonical_external_id))
     values = {
         "source": posting.source,
-        "external_id": posting.external_id,
-        "url": posting.url,
+        "external_id": canonical_external_id,
+        "url": urldefrag(posting.url)[0],
         "apply_url": posting.apply_url,
         "title": posting.title,
         "company": posting.company,
