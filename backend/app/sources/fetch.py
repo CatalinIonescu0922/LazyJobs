@@ -57,8 +57,11 @@ class SafeFetcher:
         self.source_domain = _canonical_host(source_domain)
         self._robots: dict[str, RobotFileParser] = {}
 
+    def post_json(self, url: str, body: dict) -> FetchResult:
+        return self.get(url, json_body=body)
+
     @timed
-    def get(self, url: str, *, sitemap: bool = False) -> FetchResult:
+    def get(self, url: str, *, sitemap: bool = False, json_body: dict | None = None) -> FetchResult:
         current = _validate_url(url)
         for _ in range(MAX_REDIRECTS + 1):
             host = _canonical_host(urlparse(current).hostname or "")
@@ -68,7 +71,8 @@ class SafeFetcher:
             if not self._allowed(current, host):
                 raise FetchError("disallowed by robots.txt")
             cache_key = (current, sitemap)
-            cached = _get_cached(cache_key)
+            # The cache key has no body, so a POST must never read or fill it.
+            cached = _get_cached(cache_key) if json_body is None else None
             request_headers = {"User-Agent": settings.user_agent}
             if cached:
                 if cached.etag:
@@ -78,7 +82,7 @@ class SafeFetcher:
             self._polite_wait(host)
             try:
                 with httpx.Client(timeout=20, follow_redirects=False, headers=request_headers) as client:
-                    response = client.get(current)
+                    response = client.get(current) if json_body is None else client.post(current, json=json_body)
             except httpx.HTTPError as exc:
                 _release_host(host)
                 raise FetchError(f"source request failed ({type(exc).__name__})") from exc
@@ -104,7 +108,8 @@ class SafeFetcher:
                 _release_host(host)
                 raise FetchError("response was too large")
             result = FetchResult(current, response.status_code, response.content, response.headers.get("content-type", ""), dict(response.headers))
-            _cache_response(cache_key, result)
+            if json_body is None:
+                _cache_response(cache_key, result)
             _release_host(host)
             logger.info("Fetch completed: host=%s url=%s status=%s bytes=%s", host, current, response.status_code, len(response.content))
             return result

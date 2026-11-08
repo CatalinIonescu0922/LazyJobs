@@ -71,3 +71,21 @@ def test_extract_profile_retries_a_transient_vertex_failure():
     assert extracted.full_name == "Ada Lovelace"
     assert create_client.call_count == 2
 
+
+def test_post_json_sends_the_body_and_never_touches_the_cache():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.content))
+        return httpx.Response(200, json={"ok": True})
+
+    real_client = httpx.Client
+    fetcher = SafeFetcher("example.com")
+    with patch("app.sources.fetch.httpx.Client", side_effect=lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs)), patch.object(
+        fetcher, "_allowed", return_value=True
+    ), patch.object(fetcher, "_check_address"), patch.object(fetcher, "_polite_wait"):
+        fetcher.post_json("https://example.com/jobs", {"q": 1})
+        fetcher.post_json("https://example.com/jobs", {"q": 2})
+
+    assert [method for method, _ in seen] == ["POST", "POST"]
+    assert b'"q":2' in seen[1][1].replace(b" ", b"")
