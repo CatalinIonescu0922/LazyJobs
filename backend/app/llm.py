@@ -114,12 +114,16 @@ search engine, or invented domain. Prefer employers with a public careers page."
     )
 
 
-def pick_posting_sitemaps(samples: list[str]) -> dict[str, str]:
+def pick_sitemaps(urls: list[str], terms: list[str], limit: int) -> list[str]:
     if not settings.google_cloud_project:
-        return {"prefix": ""}
-    prompt = "Choose the URL path prefix containing individual job posting pages from these sitemap samples. Return only JSON with a prefix string. Samples:\n" + "\n".join(samples[:40])
-    result = _json_call(prompt, {"type": "object", "properties": {"prefix": {"type": "string"}}, "required": ["prefix"]})
-    return result
+        raise HTTPException(status_code=503, detail="Sitemap selection is not configured")
+    prompt = f"""A job board splits its postings into these sitemap files, usually one per job category.
+Choose the {limit} files most likely to contain jobs for a candidate with these titles and skills:
+{", ".join(terms[:25])}
+Return only a JSON array of the chosen URLs, copied exactly from this list:
+""" + "\n".join(urls)
+    chosen = _json_call(prompt, {"type": "array", "items": {"type": "string"}})
+    return [url for url in chosen if url in set(urls)][:limit]
 
 
 def _json_call(prompt: str, schema: dict) -> dict | list:

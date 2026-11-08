@@ -108,7 +108,8 @@ def refresh(source_id: int, user: User = Depends(current_user), db: Session = De
     profile = db.scalar(select(Profile).where(Profile.user_id == user.id))
     country = profile.country if profile else ""
     city = profile.city if profile else ""
-    result = refresh_career_source(db, source, country, city) if source.kind in {"career", "employer"} else refresh_source(db, source)
+    terms = [*(profile.titles or []), *(profile.skills or [])] if profile else []
+    result = refresh_career_source(db, source, country, city) if source.kind in {"career", "employer"} else refresh_source(db, source, terms)
     return SourceRefreshResponse.model_validate(result)
 
 
