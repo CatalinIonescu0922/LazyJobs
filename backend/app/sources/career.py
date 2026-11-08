@@ -1,18 +1,34 @@
+import re
 from urllib.parse import parse_qs, urldefrag, unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 import pycountry
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..logging import logger, timed
 from ..models import Job, JobSource, utcnow
+from .ats import Feed, find_feed, parse_ats_url, read_feed
 from .crawl import _upsert_job
 from .extract import extract_jsonld
 from .fetch import FetchError, SafeFetcher
 
 MAX_CAREER_LINKS = 80
+_LINKED_FEED = re.compile(r"https://[a-z0-9.-]*(?:myworkdayjobs\.com|greenhouse\.io|smartrecruiters\.com)/[^\s\"'<>\\)]*")
 CAREER_WORDS = ("career", "careers", "job", "jobs", "opening", "openings", "position", "vacancy", "work-with-us")
+# Applicant-tracking systems that careers pages link to but that have no feed reader yet.
+UNSUPPORTED_ATS = {
+    "successfactors": "SuccessFactors",
+    "oraclecloud.com": "Oracle Recruiting",
+    "teamtailor.com": "Teamtailor",
+    "taleo.net": "Taleo",
+    "icims.com": "iCIMS",
+    "lever.co": "Lever",
+    "ashbyhq.com": "Ashby",
+    "workable.com": "Workable",
+    "recruitee.com": "Recruitee",
+}
 
 
 @timed
@@ -20,7 +36,19 @@ def refresh_career_source(db: Session, source: JobSource, country: str = "", cit
     source_url = source.source_url or f"https://{source.domain}"
     fetcher = SafeFetcher(source.domain)
     try:
-        root = fetcher.get(source_url)
+        if source.ats_provider:
+            return _refresh_ats(db, source, Feed(source.ats_provider, source.ats_slug), country, city)
+        try:
+            root = fetcher.get(source_url)
+        except FetchError:
+            # A blocked or moved company site can still publish its jobs through its ATS.
+            feed = find_feed(source.domain, [], country)
+            if feed is None:
+                raise
+            return _refresh_ats(db, source, feed, country, city)
+        feed = find_feed(source.domain, [root.content], country)
+        if feed is not None:
+            return _refresh_ats(db, source, feed, country, city)
         pages = [(root.url, root.content)]
         queued = _discovery_links(root.content, root.url, source.domain, country, city)
         logger.info("Career discovery started: source=%s initial_links=%s country=%s city=%s", source.domain, len(queued), country, city)
@@ -62,7 +90,7 @@ def refresh_career_source(db: Session, source: JobSource, country: str = "", cit
 
         if not added and source.posting_count == 0:
             source.status = "failed"
-            source.reason = "needs browser rendering" if _looks_like_js_shell(root.content) else "no JobPosting data found"
+            source.reason = _failure_reason(pages)
             source.extraction = ""
         else:
             source.status = "active"
@@ -78,6 +106,40 @@ def refresh_career_source(db: Session, source: JobSource, country: str = "", cit
         source.reason = str(exc)
         db.commit()
         return {"source_id": source.id, "status": source.status, "added": 0, "updated": 0, "failed": 1, "reason": source.reason}
+
+
+def _refresh_ats(db: Session, source: JobSource, feed: Feed, country: str, city: str) -> dict[str, int | str]:
+    known = set(db.scalars(select(Job.external_id).where(Job.source == source.domain)))
+    postings = read_feed(feed, source.domain, country, known, city=city)
+    for posting in postings:
+        try:
+            with db.begin_nested():
+                _upsert_job(db, posting)
+                db.flush()
+        except IntegrityError:
+            logger.warning("Duplicate job skipped: source=%s external_id=%s", source.domain, posting.external_id)
+    source.ats_provider = feed.provider
+    source.ats_slug = feed.slug
+    source.status = "active"
+    source.reason = ""
+    source.extraction = "ats"
+    source.last_refreshed_at = utcnow()
+    source.posting_count = db.query(Job).filter(Job.source == source.domain).count()
+    db.commit()
+    logger.info("ATS source refreshed: source=%s provider=%s slug=%s added=%s stored=%s", source.domain, feed.provider, feed.slug, len(postings), source.posting_count)
+    return {"source_id": source.id, "status": source.status, "added": len(postings), "updated": 0, "failed": 0, "reason": ""}
+
+
+def _failure_reason(pages: list[tuple[str, bytes]]) -> str:
+    text = " ".join(content.decode("utf-8", "ignore") for _, content in pages).lower()
+    # find_feed already rejected every feed the pages link to; its log line has the exact cause.
+    for url in _LINKED_FEED.findall(text):
+        if feed := parse_ats_url(url):
+            return f"linked {feed.provider.capitalize()} feed has no posting in your country or cannot be read"
+    for marker, name in UNSUPPORTED_ATS.items():
+        if re.search(rf"//[a-z0-9.-]*{re.escape(marker)}", text):
+            return f"careers site uses {name}, which is not supported yet"
+    return "needs browser rendering" if _looks_like_js_shell(pages[0][1]) else "no JobPosting data found"
 
 
 def _career_links(content: bytes, base_url: str, domain: str) -> list[str]:

@@ -185,3 +185,12 @@ def test_missing_sitemap_names_the_cause():
     fetcher = FakeFetcher({"https://board.ro/robots.txt": b"User-agent: *\nAllow: /\n"})
     with pytest.raises(FetchError, match=r"no sitemap found \(source returned 404\)"):
         crawl.discover_sitemap(fetcher, "board.ro")
+
+
+def test_career_failure_reason_names_an_unsupported_ats_and_a_rejected_linked_feed():
+    from app.sources.career import _failure_reason
+
+    page = b'<a href="https://career5.successfactors.eu/careers?company=Atos">Jobs</a>'
+    assert _failure_reason([("https://atos.example/", page)]) == "careers site uses SuccessFactors, which is not supported yet"
+    workday = b'<a href="https://flextronics.wd1.myworkdayjobs.com/Careers">Jobs</a>'
+    assert _failure_reason([("https://flex.example/", workday)]) == "linked Workday feed has no posting in your country or cannot be read"
