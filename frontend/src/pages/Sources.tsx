@@ -105,7 +105,7 @@ export default function Sources() {
                   <td className="px-4 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${statusStyle[source.status] ?? "bg-slate-100 text-slate-700"}`}>{source.status}</span></td>
                   <td className="px-4 py-4 text-slate-600">{source.extraction || "pending"}</td>
                   <td className="px-4 py-4 text-slate-600">{source.posting_count}</td>
-                  <td className="max-w-xs px-4 py-4 text-slate-600">{source.reason || "Ready to validate"}</td>
+                  <td className="max-w-xs px-4 py-4 text-slate-600">{source.reason || (source.status === "candidate" ? "Ready to validate" : "")}</td>
                   <td className="px-4 py-4"><div className="flex gap-2"><button type="button" onClick={() => refresh(source.id)} disabled={refreshing !== null || source.status === "disabled"} className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50">{refreshing === source.id ? "Refreshing..." : "Refresh"}</button><button type="button" onClick={() => toggle.mutate({ id: source.id, enabled: source.status === "disabled" })} className="rounded-md border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-100">{source.status === "disabled" ? "Enable" : "Disable"}</button></div></td>
                 </tr>
               ))}
