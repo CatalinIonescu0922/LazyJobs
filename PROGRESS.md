@@ -19,7 +19,7 @@ Status values: `not started`, `in progress`, `blocked`, `done`.
 | 6 | Frontend shell and sign-in | in progress | built; sign-in redirect, proxy and protected route checked. The live Google login and sign-out still to run in a browser |
 | 7 | CV upload and profile | done | PDF/DOCX upload, Cloud Storage emulator, Vertex AI extraction, editable Profile screen, adds `profiles.country`, `city` and `salary_currency` |
 | 8 | Job sources and the generic crawler | done | board discovery, safe sitemap crawler, JSON-LD extraction, Sources screen, adds `job_sources`, fingerprints and salary; focused tests pass |
-| 9 | LLM extraction tier and coverage check | not started | the coverage table gets recorded in BUILD.md here |
+| 9 | LLM extraction tier and coverage check | in progress | LLM tier built and run live (BestJobs and MyJob.ro read on it), coverage table recorded in BUILD.md. Not built: the Sources screen columns for added, skipped and failed per run |
 | 10 | Matching and the Matches screen | not started | duplicate grouping including same-company description overlap, boolean keyword query, hidden companies, salary and seniority; adds `profiles.hidden_companies` and `keyword_query` |
 | 11 | Applications, cover letters and the Tracker | not started | Vertex AI |
 
@@ -52,7 +52,7 @@ Block nothing; do them after the phase 9 coverage table says which is worth doin
 | Phase | What | Status | Notes |
 | --- | --- | --- | --- |
 | 19 | Browser rendering for JavaScript-heavy boards | not started | Playwright; skip if the coverage table shows no such board. Decide where Chromium runs from measured size |
-| 20 | Employers and their ATS feeds | not started | companies from the model, from an apply link, or from a pasted URL; Workday, SmartRecruiters, Greenhouse, Lever, Ashby, Workable, Recruitee; agencies labelled once and stored off |
+| 20 | Employers and their ATS feeds | in progress | built: Greenhouse and Workday readers, SmartRecruiters reader (blocked by that host's robots.txt), feed discovery by link and by slug guess, pasted ATS URL. Not built: Lever, Ashby, Workable, Recruitee, the apply-link route, agency labelling. See docs/sources.md |
 
 ## Cloud spend
 
@@ -152,6 +152,20 @@ against what actually happened.
   JSON-LD `JobPosting` extraction, monthly salary and fingerprint fields, source API and
   Sources screen. Migration head is `8d2f3c4b5a6e`; focused crawler tests pass and the
   frontend build is clean. Live board discovery remains a browser verification step.
+
+- 2026-11-08: Source coverage repaired after 19 of 20 sources showed red. Causes found in
+  the logs: Docker injected a corporate proxy that dropped or rate-limited job-site
+  connections (compose now blanks it); validation sampled the first three URLs of a
+  flattened sitemap and so hit login and landing pages; eJobs' 68 category sitemaps were
+  cut at 20, alphabetically, before any IT category; the career crawler never followed a
+  link from a home page. Sitemap validation now probes job-looking child sitemaps, verifies
+  by extracting postings and records `posting_prefix`; categories are chosen by Vertex AI
+  for the profile. Phase 20 started with Greenhouse and SmartRecruiters readers, but
+  SmartRecruiters' robots.txt forbids us, which removes the feeds behind Continental, Bosch
+  and Aumovio. Workday was added to phase 20 (reads Accenture's 34 Timisoara postings from a
+  pasted URL; Flex has none in Romania) and the phase 9 LLM tier was built, which turned
+  BestJobs and MyJob.ro green. Result: 6 of 21 sources read, 395 postings stored, 33 shown
+  for the profile. Decisions in docs/sources.md and the table in BUILD.md.
 
 ---
 
