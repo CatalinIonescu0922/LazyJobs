@@ -167,6 +167,16 @@ for ATS links, and each ATS's public feed was tried. The results:
   was read in this test.
 
 So about one employer in six had a feed we could read, and the feeds that worked were rich.
+
+That test did not check robots.txt, and it matters. `api.smartrecruiters.com/robots.txt`
+allows only LinkedInBot and disallows every other crawler, so the crawler's own rule (a
+host that refuses an honest crawler is a host we do not have) rules out SmartRecruiters,
+which was behind Endava, Continental, Bosch and Aumovio. Of the five readable feeds
+above, only Greenhouse and Workday remain, and Greenhouse's BearingPoint board has no
+Romanian posting. Measured again on 2026-11-08 against the twelve employers the model
+named for Timisoara, no feed we may read was found, by link or by slug guess, with a
+posting in Romania.
+
 Employers complement the boards and do not replace them. A board gives breadth, and an
 employer feed gives direct postings from the company itself, with its own apply link.
 
