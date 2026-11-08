@@ -739,6 +739,40 @@ write site-specific scrapers.
 **Done when** - at least one board with no JSON-LD yields postings through the LLM tier,
 the coverage table is written in this file, and the decision it implies is recorded.
 
+### Coverage table, measured 2026-11-08
+
+Profile: Timisoara, RO, DevOps Engineering and Team Leader. "Open to RO" is located in
+Romania, or remote with `eligible_countries` empty or containing RO. All counts are what one
+refresh stored, so they are capped by the 100 (JSON-LD, Workday) or 30 (LLM) postings read
+per run, not by what the site holds.
+
+| Source | Tier | Stored | Remote | Open to RO | Notes |
+| --- | --- | --- | --- | --- | --- |
+| ejobs.ro | jsonld | 162 | 18 | 162 | model picked 5 of 68 category sitemaps for the profile |
+| hipo.ro | jsonld | 90 | 21 | 90 | only `sitemap_lastjobs.xml` holds postings |
+| remoteok.com | jsonld | 66 | 66 | 49 | 17 are restricted to other countries; no real `lastmod` |
+| bestjobs.eu | llm | 28 | 1 | 27 | no JSON-LD; cap 30 |
+| myjob.ro | llm | 15 | 0 | 15 | microdata only; 15 of 212,094 sitemap URLs are newer than 180 days |
+| accenture (Workday) | ats | 34 | 29 | 34 | pasted URL; 34 hits for a Timisoara search |
+| weworkremotely.com | none | 0 | | | 403 to our User-Agent after one working run |
+| wellfound.com | none | 0 | | | model found no posting in the sampled pages |
+| ejobs.md | none | 0 | | | no sitemap |
+| 12 employers named by the model | none | 0 | | | see below |
+
+Total stored 395, of which 377 are open to RO; the Jobs screen shows 33 for the profile.
+
+The twelve employers: Atos moved to atos.ai, Vitesco redirects to a Schaeffler site that
+returns 403, ttiglobal.com has a broken certificate, Flex is on Workday with no Romanian
+posting, BearingPoint's Greenhouse board has none either, and the rest are SmartRecruiters
+(robots.txt refuses us), Oracle, SuccessFactors or custom portals. None needed browser
+rendering.
+
+Decision the table implies: phase 19 is not justified, because no board failed with `needs
+browser rendering`. Naming employers with the model reached 0 of 12, so phase 20 should
+continue through its other two routes, a pasted URL (done) and the apply-link route (not
+built), and not through more provider readers. Lever, Ashby, Workable and Recruitee show
+up in none of the twelve.
+
 Effort: 2.5 hours including the measurement.
 
 ---
