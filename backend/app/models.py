@@ -110,6 +110,8 @@ class JobSource(Base):
     extraction: Mapped[str] = mapped_column(String(32), default="")
     sitemap_url: Mapped[str] = mapped_column(String(1024), default="")
     posting_prefix: Mapped[str] = mapped_column(String(1024), default="")
+    ats_provider: Mapped[str] = mapped_column(String(32), default="")
+    ats_slug: Mapped[str] = mapped_column(String(255), default="")
     last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     posting_count: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
