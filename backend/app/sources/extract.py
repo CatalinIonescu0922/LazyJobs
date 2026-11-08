@@ -126,7 +126,11 @@ def _country_code(value: Any) -> str:
     if len(text) == 2:
         code = text.upper()
         return code if pycountry.countries.get(alpha_2=code) else ""
-    match = pycountry.countries.search_fuzzy(text) if text else []
+    try:
+        match = pycountry.countries.search_fuzzy(text) if text else []
+    except LookupError:
+        # Remote postings name "Anywhere" or "Worldwide", which is not a country.
+        return ""
     return match[0].alpha_2 if match else ""
 
 

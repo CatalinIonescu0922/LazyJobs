@@ -33,6 +33,8 @@ def test_country_values_are_real_iso_alpha2_codes():
     assert _country_code("DE") == "DE"
     assert _country_code("Romania") == "RO"
     assert _country_code("XX") == ""
+    assert _country_code("Anywhere") == ""
+    assert _country_code("Worldwide") == ""
 
 
 def test_fetch_rejects_non_https():
@@ -68,3 +70,4 @@ def test_extract_profile_retries_a_transient_vertex_failure():
 
     assert extracted.full_name == "Ada Lovelace"
     assert create_client.call_count == 2
+
