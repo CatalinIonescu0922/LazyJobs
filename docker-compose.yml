@@ -8,6 +8,16 @@ services:
       - backend/.env
     environment:
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_application_credentials.json
+      # Docker copies the proxy from ~/.docker/config.json into every container. On this
+      # machine that corporate proxy drops or rate-limits connections to most public job
+      # sites (robots.txt "could not be read", 429s) although direct egress works, and it
+      # would also send the compose-internal storage emulator off-machine. Blank it so the
+      # crawler, Vertex AI and the emulator all connect directly. A machine that has no
+      # direct egress needs these removed and NO_PROXY set to localhost,127.0.0.1,gcs.
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
     secrets:
       - source: google_adc
         target: google_application_credentials.json

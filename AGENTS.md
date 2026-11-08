@@ -64,6 +64,19 @@ starting the API, use `docker compose run --rm app alembic upgrade head`.
 Compose also runs Postgres 16 as `db` and a Cloud Storage emulator as `gcs`.
 `STORAGE_EMULATOR_HOST` in `backend/.env` points the storage client at the emulator.
 
+Docker copies the proxy from `~/.docker/config.json` into every container, and a
+corporate proxy dropped or rate-limited most job-site connections. Compose therefore
+blanks the proxy variables for the app. A machine with no direct internet access has to
+undo that, as the comment in `docker-compose.yml` explains.
+
+Backend tests run in the app image, from a directory other than `backend/` so the
+Settings class does not read `backend/.env`:
+
+```
+docker run --rm -e PYTHONPATH=/app -e LOG_FILE=/tmp/test.log -v "$PWD/backend":/app \
+  -w /tmp lazyjobs-app:latest python -m pytest /app/tests -q -p no:cacheprovider
+```
+
 ## Cloud
 
 Nothing is deployed. No GCP project exists yet and nothing is being billed. The design,
