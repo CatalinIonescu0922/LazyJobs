@@ -63,7 +63,7 @@ class SafeFetcher:
         for _ in range(MAX_REDIRECTS + 1):
             host = _canonical_host(urlparse(current).hostname or "")
             if not _same_source_host(host, self.source_domain):
-                raise FetchError("redirect left the source host")
+                raise FetchError(f"site redirects to {host}")
             self._check_address(host)
             if not self._allowed(current, host):
                 raise FetchError("disallowed by robots.txt")
@@ -81,7 +81,7 @@ class SafeFetcher:
                     response = client.get(current)
             except httpx.HTTPError as exc:
                 _release_host(host)
-                raise FetchError("source request failed") from exc
+                raise FetchError(f"source request failed ({type(exc).__name__})") from exc
             if response.status_code in {301, 302, 303, 307, 308}:
                 _release_host(host)
                 location = response.headers.get("location")
@@ -136,7 +136,7 @@ class SafeFetcher:
             parsed = urlparse(current)
             host = _canonical_host(parsed.hostname or "")
             if parsed.scheme != "https" or not _same_source_host(host, source_host):
-                raise FetchError("robots.txt redirect left the source host")
+                raise FetchError(f"robots.txt redirects to {host}")
             self._check_address(host)
             self._polite_wait(host)
             try:
@@ -144,7 +144,7 @@ class SafeFetcher:
                     response = client.get(current)
             except httpx.HTTPError as exc:
                 _release_host(host)
-                raise FetchError("robots.txt could not be read") from exc
+                raise FetchError(f"robots.txt could not be read ({type(exc).__name__})") from exc
             if response.status_code not in {301, 302, 303, 307, 308}:
                 _release_host(host)
                 return response
