@@ -39,6 +39,10 @@ source-management screen rather than part of the normal first-login workflow. Th
 dashboard reads cached jobs immediately; crawling happens automatically after CV upload,
 so a slow or unavailable board cannot block the main page.
 
+Job cards from Himalayas and Remote OK show a "via" credit line that links to the source,
+because their terms ask for a visible link back. The list is `CREDITED_SOURCES` in
+`src/pages/Home.tsx`; add a source's domain there when its terms require a credit.
+
 ## Contracts
 
 - `api(path, init)` always sends `credentials: "include"`. A non-2xx response throws

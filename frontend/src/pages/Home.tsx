@@ -105,6 +105,9 @@ export default function Home() {
   );
 }
 
+// These sources' terms ask for a visible link back to them.
+const CREDITED_SOURCES: Record<string, string> = { "himalayas.app": "Himalayas", "remoteok.com": "Remote OK" };
+
 function JobCard({ job }: { job: Job }) {
   return (
     <article className="flex min-h-[250px] flex-col border border-white/10 bg-white/[0.06] p-5 transition-colors hover:border-teal-300/50">
@@ -113,6 +116,11 @@ function JobCard({ job }: { job: Job }) {
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-lg font-semibold text-white">{job.title}</h3>
           <p className="mt-1 text-sm text-teal-200">{job.company || job.source}</p>
+          {CREDITED_SOURCES[job.source] && (
+            <p className="mt-1 text-xs text-slate-500">
+              via <a href={`https://${job.source}`} target="_blank" rel="noreferrer" className="underline hover:text-teal-200">{CREDITED_SOURCES[job.source]}</a>
+            </p>
+          )}
         </div>
       </div>
       <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-300">
