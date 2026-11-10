@@ -236,6 +236,12 @@ loads.
   punctuation folded). `Bucharest` and `Bucuresti` differ, and a company that two boards
   spell differently (`Societe Generale GSC` against `SOCIETE GENERALE`) does not merge.
 
+## Expired postings
+
+The job search hides a posting whose `expires_at` (JSON-LD `validThrough`, Himalayas
+`expiryDate`) is in the past and counts it under `rejected.expired` in the log. Nothing is
+deleted for this, apart from the Himalayas closed-job rule above.
+
 ## Operation
 
 Crawler timings are written to `backend/logs/app.log`. Timed entries include

@@ -185,7 +185,8 @@ def _filter_jobs(
     cutoff,
 ) -> tuple[list[JobResponse], dict[str, int]]:
     filtered = []
-    rejected = {"terms": 0, "location": 0, "country": 0, "mode": 0, "age": 0}
+    rejected = {"expired": 0, "terms": 0, "location": 0, "country": 0, "mode": 0, "age": 0}
+    now = utcnow()
     for job in jobs:
         job_text = " ".join([job.title, job.company, job.description]).lower()
         if search_terms and not any(term in job_text for term in search_terms):
@@ -263,6 +264,9 @@ def _preference(job: Job, employer_domains: set[str]) -> tuple[bool, datetime]:
         employment_type=job.employment_type,
         description=job.description,
         url=job.url,
+        if job.expires_at and job.expires_at < now:
+            rejected["expired"] += 1
+            continue
         apply_url=job.apply_url,
         posted_at=job.posted_at,
         salary_min=job.salary_min,
