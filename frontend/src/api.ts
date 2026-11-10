@@ -185,3 +185,66 @@ export function uploadCv(file: File): Promise<Profile> {
 export function logout(): Promise<void> {
   return api<void>("/api/auth/logout", { method: "POST" });
 }
+
+export type CompanyCounts = { total: number; feed: number; none: number; unchecked: number };
+
+export type FeedCard = {
+  source_id: number;
+  name: string;
+  provider: string;
+  provider_label: string;
+  slug: string;
+  status: string;
+  reason: string;
+  jobs: number;
+  last_refreshed_at: string | null;
+  domain: string;
+  logo_url: string;
+  careers_url: string;
+};
+
+export type CompanyCard = {
+  id: number;
+  name: string;
+  postings: number;
+  status: string;
+  provider: string;
+  provider_label: string;
+  slug: string;
+  domain: string;
+  logo_url: string;
+  checked_at: string | null;
+  jobs: number | null;
+  source_status: string | null;
+};
+
+export type CompaniesResponse = {
+  counts: CompanyCounts;
+  feeds: FeedCard[];
+  companies: CompanyCard[];
+  total_matching: number;
+};
+
+export type CompanyStatusFilter = "all" | "feed" | "none" | "unchecked";
+
+export type CompaniesParams = {
+  status: CompanyStatusFilter;
+  search: string;
+  limit: number;
+  offset: number;
+};
+
+export function listCompanies({ status, search, limit, offset }: CompaniesParams): Promise<CompaniesResponse> {
+  const params = new URLSearchParams({ status, limit: String(limit), offset: String(offset) });
+  if (search) params.set("search", search);
+  return api<CompaniesResponse>(`/api/companies?${params}`);
+}
+
+export function companiesQuery(params: CompaniesParams) {
+  return queryOptions({
+    queryKey: ["companies", params],
+    queryFn: () => listCompanies(params),
+    retry: false,
+    staleTime: 60_000,
+  });
+}

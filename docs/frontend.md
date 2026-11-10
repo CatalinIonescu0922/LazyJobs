@@ -43,6 +43,30 @@ Job cards from Himalayas and Remote OK show a "via" credit line that links to th
 because their terms ask for a visible link back. The list is `CREDITED_SOURCES` in
 `src/pages/Home.tsx`; add a source's domain there when its terms require a credit.
 
+## Companies screen
+
+`/companies` (`src/pages/Companies.tsx`, reached from the header nav) shows the `companies` list the
+backend builds, served by `GET /api/companies` (contract and meaning in `docs/sources.md`, Company
+discovery). A summary strip gives the counts, "Read directly" has a card per employer feed (provider
+badge, jobs, "updated 2 hours ago", a status chip with its reason when the feed is not active, and a
+link to the careers page), and "Companies that hire in your country" is a card grid with four filter
+tabs (all, with a feed, no readable feed, not checked yet) and a name search.
+
+- The summary strip and the feed cards come from one unfiltered query (status all, no search, first
+  page), so they do not move while the list below reloads. It is the same cache entry as the first
+  page of the All tab.
+- Paging is one query per page of 60 (`useQueries`, offsets 0, 60, 120 and so on), concatenated;
+  "Show more" appears while fewer than `total_matching` companies are shown. A failed page shows a
+  retry button in place of "Show more", so pages never load out of order. The list is keyed by
+  `status:search`, so changing the tab or the applied search starts again at the first page.
+- The search is debounced by 300 ms and has no button.
+- A company logo is the image at `logo_url`. When that is empty, or the image fails to load, a rounded
+  square with the first two initials is shown, its colour taken from a hash of the name so it is stable.
+- The API sends UTC timestamps without a timezone suffix, so `ago()` appends "Z" before building a
+  `Date`; it is the only place timestamps are parsed.
+- Not checked in a browser: the page sits behind Google sign-in and was only type-checked, built and
+  reviewed against the API contract.
+
 ## Contracts
 
 - `api(path, init)` always sends `credentials: "include"`. A non-2xx response throws

@@ -5,6 +5,7 @@ import Home from "./pages/Home";
 import SignIn from "./pages/SignIn";
 import Profile from "./pages/Profile";
 import Sources from "./pages/Sources";
+import Companies from "./pages/Companies";
 
 function ProtectedRoute() {
   const me = useQuery(meQuery);
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: "/", element: <Home /> },
       { path: "/profile", element: <Profile /> },
       { path: "/sources", element: <Sources /> },
+      { path: "/companies", element: <Companies /> },
     ],
   },
 ]);

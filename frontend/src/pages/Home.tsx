@@ -56,6 +56,7 @@ export default function Home() {
           <nav className="flex items-center gap-2 text-sm">
             <Link to="/profile" className="rounded-md px-3 py-2 text-slate-300 hover:bg-white/10 hover:text-white">Profile</Link>
             <Link to="/sources" className="rounded-md px-3 py-2 text-slate-300 hover:bg-white/10 hover:text-white">Sources</Link>
+            <Link to="/companies" className="rounded-md px-3 py-2 text-slate-300 hover:bg-white/10 hover:text-white">Companies</Link>
             <button type="button" onClick={() => signOut.mutate()} disabled={signOut.isPending} className="rounded-md border border-white/15 px-3 py-2 text-slate-200 hover:bg-white/10 disabled:opacity-50">Sign out</button>
           </nav>
         </div>
