@@ -296,3 +296,11 @@ def test_refresh_of_a_model_read_source_stops_at_the_lower_cap():
     assert result["added"] == crawl.MAX_LLM_POSTINGS
     assert fake.call_count == crawl.MAX_LLM_POSTINGS
     assert len(fetcher.requested) == 1 + crawl.MAX_LLM_POSTINGS
+
+
+def test_hiring_cafe_is_refused_under_both_of_its_domains():
+    from app.routers.sources import _is_unsupported
+
+    assert _is_unsupported("hiring.cafe")
+    assert _is_unsupported("www.hiringcafe.com".removeprefix("www."))
+    assert not _is_unsupported("ejobs.ro")

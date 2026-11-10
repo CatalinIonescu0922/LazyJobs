@@ -20,6 +20,8 @@ UNSUPPORTED_DOMAINS = {
     "linkedin.com",
     "indeed.com",
     "glassdoor.com",
+    "hiring.cafe",
+    "hiringcafe.com",
     "jooble.org",
     "facebook.com",
 }

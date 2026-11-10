@@ -242,6 +242,27 @@ The job search hides a posting whose `expires_at` (JSON-LD `validThrough`, Himal
 `expiryDate`) is in the past and counts it under `rejected.expired` in the log. Nothing is
 deleted for this, apart from the Himalayas closed-job rule above.
 
+## Sources that refuse an honest crawler
+
+hiring.cafe (now `hiringcafe.com`) is refused in `UNSUPPORTED_DOMAINS`. Checked 2026-11-09:
+
+- robots.txt allows `/job/` and `/jobs/` and has no rule for `/api`, so robots.txt alone
+  would allow a query.
+- An honest request is refused anyway. Every page tried (the sitemaps,
+  `/recently-posted-jobs`, the terms page) and one `POST /api/search-jobs/get-total-count`
+  through `SafeFetcher` returned the Cloudflare "Just a moment..." challenge, HTTP 403.
+- Web sources report that it has no public API, that its old `/api/search-jobs` endpoints
+  were locked down, and that the extractors which still work drive a stealth browser. The
+  public scraper `umur957/hiring-cafe-job-scraper` is of the older kind: it calls that API
+  with a Chrome User-Agent and `sec-ch-ua` headers, 1000 jobs a page with no delay. Both
+  routes are identity spoofing, which the crawler's rules forbid.
+- The terms page could not be fetched (403). Through a search result they allow personal
+  use under restrictions and forbid selling, renting or sub-licensing the material; a
+  summary there also says copying and republishing are forbidden.
+
+The way in is to ask. The terms give `ali@hiring.cafe` as the contact, and people asking
+for an API are told a feed or partnership is the route.
+
 ## Operation
 
 Crawler timings are written to `backend/logs/app.log`. Timed entries include
