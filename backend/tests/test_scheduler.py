@@ -138,8 +138,10 @@ def test_a_discovered_company_is_refreshed_at_once_and_then_every_interval(sessi
     runs = []
     record = lambda uid, profile, sources: runs.append(sorted(source.domain for source in sources))  # noqa: E731
     with patch.object(jobs, "SessionLocal", session_factory), patch.object(jobs, "_run_refresh", side_effect=record), patch.object(
-        discovery, "find_feed_for_company", return_value=Feed("greenhouse", "emag")
-    ) as find, patch.object(discovery, "SafeFetcher"), patch.object(discovery.time, "sleep"):
+        jobs, "enrich_domains"
+    ), patch.object(discovery, "find_feed_for_company", return_value=Feed("greenhouse", "emag")) as find, patch.object(
+        discovery, "SafeFetcher"
+    ), patch.object(discovery.time, "sleep"):
         jobs.refresh_due_sources(timedelta(hours=12))
         with session_factory() as db:
             # What the run did: the new feed was read once, and a whole interval has now passed for both sources.
@@ -150,3 +152,14 @@ def test_a_discovered_company_is_refreshed_at_once_and_then_every_interval(sessi
     assert runs == [["ejobs.ro", "emag.greenhouse.io"], ["ejobs.ro", "emag.greenhouse.io"]]
     # The company was asked about once; its answer is stored and not looked up again.
     assert find.call_count == 1
+
+
+def test_a_failed_domain_lookup_does_not_keep_feeds_from_being_found(session_factory):
+    user_id = add_user(session_factory, "a@example.com")
+    with session_factory() as db:
+        feed = JobSource(user_id=user_id, domain="found.greenhouse.io", kind="employer")
+        with patch.object(jobs, "seed_companies"), patch.object(jobs, "enrich_domains", side_effect=RuntimeError("vertex down")), patch.object(
+            jobs, "discover_feeds", return_value=[feed]
+        ) as discover:
+            assert jobs._discover_companies(db, user_id, "RO") == [feed]
+    discover.assert_called_once()

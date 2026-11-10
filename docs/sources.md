@@ -325,6 +325,16 @@ the user's country and works out, one at a time, which of them have a feed it ma
   its status, records `last refresh failed: ...`, and stamps `last_refreshed_at` as the attempt, so
   the next try is a full interval later and a permanent refusal costs about two requests a day. A
   user who disables a source is respected: it is not refreshed and its company is not probed again.
+- Each company also gets a website domain, only so the Companies screen can show its logo.
+  The model proposes domains in batches of 40 (the best-known companies first, in the same scheduled
+  run, before the feed probe) and the code keeps one only if it plausibly belongs to the company: the
+  domain's name must contain, or be contained in, the company name without legal suffixes and the
+  country word, or start with its first word. A rejected or missing answer is stored as an empty
+  string, which means "asked, unknown", while a null `domain` means nobody has asked yet, so a
+  made-up domain never produces a wrong logo and nothing is asked twice. A failed lookup leaves the
+  companies null to be asked again, and never stops the feed probe. The logo is the favicon the Google
+  service returns for the domain, the same service the job cards already use, and the screen falls back
+  to initials when there is no domain or the image does not load.
 - Measured on 2026-11-10 on the 34 largest companies in the stored board postings: 2 had a
   readable Greenhouse board with Romanian postings, Veeam (15) and eMAG (18), about 6%. Model-named
   companies gave none in 50.

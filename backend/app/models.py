@@ -133,6 +133,8 @@ class Company(Base):
     status: Mapped[str] = mapped_column(String(16), default="unchecked", index=True)
     ats_provider: Mapped[str] = mapped_column(String(32), default="")
     ats_slug: Mapped[str] = mapped_column(String(255), default="")
+    # None means nobody has asked yet; "" means it was asked and no domain is known.
+    domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

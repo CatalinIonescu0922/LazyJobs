@@ -18,7 +18,7 @@ from ..session import current_user
 from ..textnorm import fingerprint
 from ..sources.aggregator import refresh_aggregator_source
 from ..sources.crawl import refresh_source
-from ..sources.discovery import discover_feeds, seed_companies
+from ..sources.discovery import discover_feeds, enrich_domains, seed_companies
 from ..sources.career import refresh_career_source
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -171,6 +171,17 @@ def refresh_any(db: Session, source: JobSource, country: str, city: str, terms: 
 def _discover_companies(db: Session, user_id: int, country: str) -> list[JobSource]:
     try:
         seed_companies(db, user_id, country)
+    except Exception:
+        logger.exception("Company discovery failed: user_id=%s", user_id)
+        db.rollback()
+        return []
+    # The logo lookup is cosmetic, so its failure never keeps a feed from being found.
+    try:
+        enrich_domains(db, user_id, country)
+    except Exception:
+        logger.exception("Company domain lookup failed: user_id=%s", user_id)
+        db.rollback()
+    try:
         return discover_feeds(db, user_id, country)
     except Exception:
         logger.exception("Company discovery failed: user_id=%s", user_id)

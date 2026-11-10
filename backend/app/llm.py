@@ -114,6 +114,18 @@ search engine, or invented domain. Prefer employers with a public careers page."
     )
 
 
+def propose_domains(names: list[str], country: str) -> list[dict[str, str]]:
+    if not settings.google_cloud_project:
+        raise HTTPException(status_code=503, detail="Domain lookup is not configured")
+    prompt = f"""For each company below, give the domain of its official website, domain only, for example bitdefender.com.
+These companies hire in {country}. When the name is a local branch, give the group's main domain.
+Answer with an empty domain for any company you are not sure about, and never invent one.
+Return only a JSON array of objects with company and domain, using the company names exactly as given.
+Companies:
+""" + "\n".join(names)
+    return _json_call(prompt, {"type": "array", "items": {"type": "object", "properties": {"company": {"type": "string"}, "domain": {"type": "string"}}, "required": ["company", "domain"]}})
+
+
 def pick_sitemaps(urls: list[str], terms: list[str], limit: int) -> list[str]:
     if not settings.google_cloud_project:
         raise HTTPException(status_code=503, detail="Sitemap selection is not configured")

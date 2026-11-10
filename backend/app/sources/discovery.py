@@ -1,3 +1,4 @@
+import re
 import time
 from collections import Counter
 from datetime import timedelta
@@ -5,13 +6,15 @@ from datetime import timedelta
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from ..llm import propose_domains
 from ..logging import logger
 from ..models import Company, Job, JobSource, utcnow
 from ..textnorm import normalise
-from .ats import find_feed_for_company, source_domain
+from .ats import _domain_label, find_feed_for_company, source_domain
 from .fetch import FetchError, SafeFetcher
 
 MAX_PROBES = 20
+MAX_DOMAIN_LOOKUPS = 40
 RECHECK_AFTER = timedelta(days=30)
 PAUSE_SECONDS = 1
 GREENHOUSE_API = "boards-api.greenhouse.io"
@@ -85,3 +88,36 @@ def discover_feeds(db: Session, user_id: int, country: str) -> list[JobSource]:
     db.commit()
     logger.info("Company discovery finished: user_id=%s probed=%s new_sources=%s", user_id, len(due), [source.domain for source in created])
     return created
+
+
+def enrich_domains(db: Session, user_id: int, country: str) -> int:
+    # Only for the logo on the Companies screen. The model proposes a domain and the code keeps it only
+    # when it plausibly belongs to the company, so a made-up one is stored as unknown.
+    todo = db.scalars(
+        select(Company).where(Company.user_id == user_id, Company.domain.is_(None)).order_by(Company.postings.desc(), Company.id).limit(MAX_DOMAIN_LOOKUPS)
+    ).all()
+    if not todo:
+        return 0
+    answers = {normalise(str(answer.get("company", ""))): str(answer.get("domain", "")) for answer in propose_domains([company.name for company in todo], country)}
+    found = 0
+    for company in todo:
+        domain = _clean_domain(answers.get(company.key, ""))
+        company.domain = domain if domain and domain_fits(company.name, domain) else ""
+        found += bool(company.domain)
+    db.commit()
+    logger.info("Company domains looked up: user_id=%s asked=%s kept=%s", user_id, len(todo), found)
+    return found
+
+
+def domain_fits(name: str, domain: str) -> bool:
+    words = [word for word in normalise(name).split() if word not in {"romania", "romanian"}] or normalise(name).split()
+    squashed = "".join(words)
+    label = re.sub(r"[^a-z0-9]", "", _domain_label(domain))
+    first = words[0] if words else ""
+    # A two-letter brand (EY, NN) is accepted only when it is exactly the first word of the name.
+    return (len(label) >= 3 or label == first) and (label in squashed or squashed in label or (len(first) >= 3 and label.startswith(first)))
+
+
+def _clean_domain(raw: str) -> str:
+    host = re.sub(r"^https?://", "", raw.strip().lower()).split("/")[0].removeprefix("www.")
+    return host if re.fullmatch(r"(?:[a-z0-9-]+\.)+[a-z]{2,}", host) else ""
