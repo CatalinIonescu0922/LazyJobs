@@ -199,6 +199,27 @@ Not covered: SuccessFactors, Oracle Recruiting, Teamtailor, Taleo, iCIMS, Lever,
 Workable, Recruitee and custom portals. A careers page that links to one of them
 fails with a reason naming it.
 
+## Scheduled refresh (`scheduler.py`)
+
+While the app runs, a background task refreshes sources so jobs accumulate without clicking.
+`REFRESH_INTERVAL_HOURS` (default 12, so twice a day; 0 turns it off) is the only setting.
+
+- 60 seconds after startup and then every 30 minutes, `refresh_due_sources` picks the `active`
+  sources whose `last_refreshed_at` is empty or older than the interval, for every user with a
+  profile and a country, and refreshes them through the same worker pool as a manual refresh.
+  Using `last_refreshed_at` makes a restart harmless: sources refreshed an hour ago are
+  skipped, and after a long downtime everything due runs at once.
+- `failed` and `candidate` sources are skipped; a failed source is retried only by its Refresh
+  button.
+- It takes the same lock as a manual refresh without waiting, and skips the tick when a manual
+  refresh is running.
+- Each run reads up to 100 new postings per JSON-LD board and 30 per model-tier board, so twice
+  a day it costs up to about 60 model calls a day (roughly a tenth of a cent each) for BestJobs
+  and MyJob.ro together. Politeness is unchanged: one request a second per host.
+- On Cloud Run the app scales to zero and a loop inside it cannot be relied on. Set
+  `REFRESH_INTERVAL_HOURS=0` there and call `refresh_due_sources` from the scheduled job
+  (phase 14).
+
 ## Safety rules
 
 `SafeFetcher` allows HTTPS only, checks every resolved address against private, loopback,

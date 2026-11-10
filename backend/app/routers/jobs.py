@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -16,7 +16,6 @@ from ..models import Job, JobSource, Profile, User, utcnow
 from ..schemas import JobResponse, JobSearchRequest, JobSearchResponse
 from ..session import current_user
 from ..textnorm import fingerprint
-from ..sources.aggregator import refresh_aggregator_source
 from ..sources.crawl import refresh_source
 from ..sources.career import refresh_career_source
 
@@ -109,20 +108,51 @@ def _refresh_user_sources_locked(db: Session, user: User, profile: Profile) -> N
         if source.status == "active" or refresh_candidates
     ]
     logger.info("Job refresh plan: user_id=%s refresh_count=%s skipped_failed=%s", user.id, len(sources_to_refresh), len(sources) - len(sources_to_refresh))
+    _run_refresh(user.id, profile, sources_to_refresh)
+    logger.info("Job refresh completed: user_id=%s active_sources=%s", user.id, sum(source.status == "active" for source in sources))
+
+
+def _run_refresh(user_id: int, profile: Profile, sources: list[JobSource]) -> None:
     terms = _profile_terms(profile)
     with ThreadPoolExecutor(max_workers=settings.crawl_workers, thread_name_prefix="source-refresh") as executor:
         futures = {
             executor.submit(_refresh_one_source, source.id, profile.country, profile.city, terms): source.domain
-            for source in sources_to_refresh
+            for source in sources
         }
         for future in as_completed(futures):
             domain = futures[future]
             try:
                 result = future.result()
-                logger.info("Job source refreshed: user_id=%s source=%s status=%s added=%s failed=%s posting_count=%s", user.id, domain, result["status"], result["added"], result["failed"], result["posting_count"])
+                logger.info("Job source refreshed: user_id=%s source=%s status=%s added=%s failed=%s posting_count=%s", user_id, domain, result["status"], result["added"], result["failed"], result["posting_count"])
             except Exception:
                 logger.exception("Automatic job refresh failed for source=%s", domain)
-    logger.info("Job refresh completed: user_id=%s active_sources=%s", user.id, sum(source.status == "active" for source in sources))
+
+
+def refresh_due_sources(max_age: timedelta) -> None:
+    # A manual refresh in progress already covers every source, so the scheduled one waits for the next tick.
+    if not _refresh_lock.acquire(blocking=False):
+        logger.info("Scheduled refresh skipped: a refresh is already running")
+        return
+    db = SessionLocal()
+    try:
+        cutoff = utcnow() - max_age
+        for user in db.scalars(select(User)).all():
+            profile = db.scalar(select(Profile).where(Profile.user_id == user.id))
+            if profile is None or not profile.country:
+                continue
+            due = db.scalars(
+                select(JobSource).where(
+                    JobSource.user_id == user.id,
+                    JobSource.status == "active",
+                    or_(JobSource.last_refreshed_at.is_(None), JobSource.last_refreshed_at < cutoff),
+                )
+            ).all()
+            if due:
+                logger.info("Scheduled refresh started: user_id=%s due_sources=%s", user.id, [source.domain for source in due])
+                _run_refresh(user.id, profile, due)
+    finally:
+        db.close()
+        _refresh_lock.release()
 
 
 def _refresh_one_source(source_id: int, country: str, city: str, terms: list[str]) -> dict[str, int | str]:
@@ -176,6 +206,29 @@ def _search(db: Session, user: User, profile: Profile, request: JobSearchRequest
     return JobSearchResponse(jobs=filtered, match_scope=match_scope)
 
 
+def _without_duplicates(jobs: list[Job], employer_domains: set[str]) -> list[Job]:
+    # A job with no company name has nothing to tell it apart from another employer's, so it is never merged.
+    keyed = [(job, _same_job_key(job) if job.company.strip() else f"unnamed:{position}") for position, job in enumerate(jobs)]
+    best: dict[str, Job] = {}
+    for job, key in keyed:
+        current = best.get(key)
+        if current is None or _preference(job, employer_domains) < _preference(current, employer_domains):
+            best[key] = job
+    return [job for job, key in keyed if best[key] is job]
+
+
+def _same_job_key(job: Job) -> str:
+    # Boards write a location differently ("Bucuresti, Bucuresti, RO" against "BUCURESTI ,, RO"),
+    # so only the city name is compared, not the whole address that the stored fingerprint uses.
+    city = (job.locations or [""])[0].split(",")[0]
+    return fingerprint(job.company, job.title, city)
+
+
+def _preference(job: Job, employer_domains: set[str]) -> tuple[bool, datetime]:
+    # The employer's own posting carries its direct apply link; otherwise the earliest one seen is the original.
+    return job.source not in employer_domains, job.first_seen_at
+
+
 def _filter_jobs(
     jobs: list[Job],
     search_terms: list[str],
@@ -188,6 +241,9 @@ def _filter_jobs(
     rejected = {"expired": 0, "terms": 0, "location": 0, "country": 0, "mode": 0, "age": 0}
     now = utcnow()
     for job in jobs:
+        if job.expires_at and job.expires_at < now:
+            rejected["expired"] += 1
+            continue
         job_text = " ".join([job.title, job.company, job.description]).lower()
         if search_terms and not any(term in job_text for term in search_terms):
             rejected["terms"] += 1
@@ -230,29 +286,6 @@ def _profile_terms(profile: Profile) -> list[str]:
 
 
 def _job_response(job: Job) -> JobResponse:
-def _without_duplicates(jobs: list[Job], employer_domains: set[str]) -> list[Job]:
-    # A job with no company name has nothing to tell it apart from another employer's, so it is never merged.
-    keyed = [(job, _same_job_key(job) if job.company.strip() else f"unnamed:{position}") for position, job in enumerate(jobs)]
-    best: dict[str, Job] = {}
-    for job, key in keyed:
-        current = best.get(key)
-        if current is None or _preference(job, employer_domains) < _preference(current, employer_domains):
-            best[key] = job
-    return [job for job, key in keyed if best[key] is job]
-
-
-def _same_job_key(job: Job) -> str:
-    # Boards write a location differently ("Bucuresti, Bucuresti, RO" against "BUCURESTI ,, RO"),
-    # so only the city name is compared, not the whole address that the stored fingerprint uses.
-    city = (job.locations or [""])[0].split(",")[0]
-    return fingerprint(job.company, job.title, city)
-
-
-def _preference(job: Job, employer_domains: set[str]) -> tuple[bool, datetime]:
-    # The employer's own posting carries its direct apply link; otherwise the earliest one seen is the original.
-    return job.source not in employer_domains, job.first_seen_at
-
-
     return JobResponse(
         id=job.id,
         title=job.title,
@@ -264,9 +297,6 @@ def _preference(job: Job, employer_domains: set[str]) -> tuple[bool, datetime]:
         employment_type=job.employment_type,
         description=job.description,
         url=job.url,
-        if job.expires_at and job.expires_at < now:
-            rejected["expired"] += 1
-            continue
         apply_url=job.apply_url,
         posted_at=job.posted_at,
         salary_min=job.salary_min,

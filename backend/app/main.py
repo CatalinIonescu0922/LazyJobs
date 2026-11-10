@@ -1,3 +1,6 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -9,8 +12,19 @@ from .routers.auth import router as auth_router
 from .routers.jobs import router as jobs_router
 from .routers.profile import router as profile_router
 from .routers.sources import router as sources_router
+from .scheduler import run as run_scheduler
 
-app = FastAPI(title="CV Applier")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Cloud Run scales to zero, so a loop inside the app cannot be relied on there; set 0 and use the scheduled job.
+    scheduler = asyncio.create_task(run_scheduler()) if settings.refresh_interval_hours > 0 else None
+    yield
+    if scheduler:
+        scheduler.cancel()
+
+
+app = FastAPI(title="CV Applier", lifespan=lifespan)
 
 
 @app.middleware("http")
