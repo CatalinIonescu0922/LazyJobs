@@ -198,6 +198,23 @@ Providers:
   crawler does not change identity to get around that. The reader needs no change if
   they alter robots.txt.
 
+ATS hosts and what their robots.txt says to us, measured 2026-11-10 with our User-Agent. This
+is what the fetcher is allowed to do, not a licence: the vendors' terms of use were not read.
+
+| ATS | API host | robots.txt | Fetcher may call it | Reader |
+| --- | --- | --- | --- | --- |
+| Greenhouse | `boards-api.greenhouse.io` | blocks only `/embed/` | yes | built |
+| Workday | `{tenant}.{cluster}.myworkdayjobs.com` | blocks only `/refreshFacet/` | yes | built |
+| Lever | `api.lever.co` | `Allow: /`, `Crawl-delay: 1` (the fetcher obeys it) | yes | not built |
+| Workable | `apply.workable.com` | allows everything; content-signal `ai-train=no` | yes | not built |
+| Recruitee | `{company}.recruitee.com` | each company sets its own; some disallow us | company by company | not built |
+| Ashby | `api.ashbyhq.com` | the file answers 401 | no: the fetcher treats a 401, 403 or 429 on robots.txt as a refusal | not built |
+| SmartRecruiters | `api.smartrecruiters.com` | only LinkedInBot is allowed | no | built, always refused |
+
+Ashby's posting API answered a plain request in an earlier test, and RFC 9309 treats a 4xx
+robots.txt as "no rules", so the refusal is this project's stricter choice and not Ashby's.
+Whether to make an exception for a documented public API is a decision still open.
+
 Not covered: SuccessFactors, Oracle Recruiting, Teamtailor, Taleo, iCIMS, Lever, Ashby,
 Workable, Recruitee and custom portals. A careers page that links to one of them
 fails with a reason naming it.
