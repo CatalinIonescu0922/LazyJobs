@@ -144,6 +144,45 @@ def find_feed_for_company(name: str, country: str, fetcher: SafeFetcher) -> Feed
     return None
 
 
+def find_feed_for_board(provider: str, token: str, country: str, greenhouse: SafeFetcher) -> Feed | None:
+    # The published directory already ties this board to the company by name, so only the country rule is checked.
+    if provider == GREENHOUSE:
+        feed, fetcher = Feed(GREENHOUSE, token), greenhouse
+    elif provider == WORKDAY:
+        parts = token.split("/", 2)
+        if len(parts) != 3:
+            return None
+        instance, tenant, site = parts
+        feed, fetcher = Feed(WORKDAY, f"{tenant}.{instance}/{site}"), SafeFetcher(f"{tenant}.{instance}.{_SOURCE_DOMAINS[WORKDAY]}")
+    else:
+        return None
+
+    def api(url: str, body: dict | None = None) -> dict:
+        return _get_json(fetcher, url, body)
+
+    try:
+        reason = _rejection(feed, api, country.upper(), None)
+    except FetchError as exc:
+        if str(exc) != "source returned 404":
+            raise
+        reason = "the board no longer exists"
+    if reason is None:
+        logger.info("ATS feed accepted: provider=%s slug=%s from the directory", feed.provider, feed.slug)
+        return feed
+    logger.info("ATS feed rejected: provider=%s slug=%s from the directory reason=%s", feed.provider, feed.slug, reason)
+    return None
+
+
+def careers_url(feed: Feed) -> str:
+    if feed.provider == WORKDAY:
+        tenant_cluster, site = feed.slug.split("/", 1)
+        tenant, cluster = tenant_cluster.split(".", 1)
+        return f"https://{tenant}.{cluster}.{_SOURCE_DOMAINS[WORKDAY]}/{site}"
+    if feed.provider == SMARTRECRUITERS:
+        return f"https://jobs.smartrecruiters.com/{feed.slug}"
+    return f"https://boards.greenhouse.io/{feed.slug}"
+
+
 def source_domain(feed: Feed) -> str:
     # A company on an ATS has no domain of its own, and job_sources needs one that is unique per company.
     if feed.provider == WORKDAY:

@@ -341,6 +341,35 @@ the user's country and works out, one at a time, which of them have a feed it ma
   its status, records `last refresh failed: ...`, and stamps `last_refreshed_at` as the attempt, so
   the next try is a full interval later and a permanent refusal costs about two requests a day. A
   user who disables a source is respected: it is not refreshed and its company is not probed again.
+- The published directory of ATS boards narrows the guessing. `directory.py` downloads one public
+  file of company job boards (`kalebconfer-sys.github.io/job-board-directory`, licence CC0, about
+  12,000 boards on Greenhouse, Ashby, Workable, Workday, Recruitee, Personio, Rippling and Lever,
+  each confirmed live against its vendor's API by the publisher) and stores it in `ats_boards`. It
+  is one request of about 3.5 MB through the fetcher, repeated only when the stored copy is more than
+  30 days old. A broken download (not JSON, not a list, fewer than 1,000 usable boards) leaves the
+  stored copy alone and is not retried for 6 hours. The file is third-party data: rows whose token
+  does not look like a board token (or, for Workday, `wdN/tenant/site`) are dropped, and its URLs are
+  never fetched, only addresses built from the provider and token by the readers.
+- `match_companies` links each company to a board by its whole name, exactly, against the board's
+  company name or token (a Workday board by its tenant): "Veeam Software" is `veeamsoftware`. A first
+  word alone never matches, because "ROBERT BOSCH SRL" would otherwise match a Recruitee board called
+  `robert`. When several boards match, one on a provider we can read beats one we cannot, then the one
+  with the most open roles. The result is kept on the company (`board_provider`, `board_token`; null
+  means not matched yet, an empty string no match) and every company that is not already a feed is
+  matched again after a new import.
+- Probe order: a company whose directory board is on a provider we can read (Greenhouse, Workday) is
+  probed first, through that board and with only the country rule, since the directory already ties it
+  to the company. Every other company is then probed by name as before, because the directory is not
+  complete: eMAG's Greenhouse board is not in it. A board on a provider with no reader yet (Ashby,
+  Workable, Recruitee, Lever) is stored and shown on the card ("on Workable, no reader yet") and
+  does not change the order.
+- Measured on 2026-11-10 on 399 companies: 35 (9%) match a board by whole name, on Ashby 12,
+  Greenhouse 9, Workable 6, Recruitee 5, Workday 1, Personio 1, Rippling 1. Reading 32 of the matched
+  boards, only 3 had a posting located in Romania (Veeam, Flosum, SupportYourApp). Most of the others
+  are remote-first companies that reached the list through Himalayas or RemoteOK and never write
+  "Romania" in a location. On the 23 boards read, 8 carried region-wide roles ("EMEA", "Europe", "EU",
+  "worldwide", "anywhere"): 350 roles, 238 of them at Canonical. The country rule drops those,
+  although they are open to someone in Romania; changing it is a decision not yet taken.
 - Each company also gets a website domain, only so the Companies screen can show its logo.
   The model proposes domains in batches of up to 40 (the best-known companies first, on a tick,
   before the feed probe) and only once at least 10 companies are waiting, so a few new names do not

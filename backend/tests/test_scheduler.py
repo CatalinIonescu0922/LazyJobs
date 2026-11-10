@@ -142,7 +142,7 @@ def test_a_discovered_company_is_refreshed_at_once_and_then_every_interval(sessi
     record = lambda uid, profile, sources: runs.append(sorted(source.domain for source in sources))  # noqa: E731
     with patch.object(jobs, "SessionLocal", session_factory), patch.object(jobs, "_run_refresh", side_effect=record), patch.object(
         jobs, "enrich_domains"
-    ), patch.object(discovery, "find_feed_for_company", return_value=Feed("greenhouse", "emag")) as find, patch.object(
+    ), patch.object(jobs, "import_directory"), patch.object(jobs, "match_companies"), patch.object(discovery, "find_feed_for_company", return_value=Feed("greenhouse", "emag")) as find, patch.object(
         discovery, "SafeFetcher"
     ), patch.object(discovery.time, "sleep"):
         jobs.refresh_due_sources(timedelta(hours=12))
@@ -161,7 +161,7 @@ def test_a_failed_domain_lookup_does_not_keep_feeds_from_being_found(session_fac
     user_id = add_user(session_factory, "a@example.com")
     with session_factory() as db:
         feed = JobSource(user_id=user_id, domain="found.greenhouse.io", kind="employer")
-        with patch.object(jobs, "seed_companies"), patch.object(
+        with patch.object(jobs, "seed_companies"), patch.object(jobs, "import_directory"), patch.object(jobs, "match_companies"), patch.object(
             jobs, "enrich_domains", side_effect=RuntimeError("vertex down")
         ), patch.object(
             jobs, "discover_feeds", return_value=[feed]
@@ -211,3 +211,27 @@ def test_a_larger_fleet_is_refreshed_in_slices(session_factory):
     ):
         jobs.refresh_due_sources(timedelta(hours=12), timedelta(minutes=30))
     assert batches == [3]
+
+
+def test_each_tick_imports_the_directory_then_matches_then_looks_up_logos_then_probes(session_factory):
+    user_id = add_user(session_factory, "a@example.com")
+    calls = []
+    with session_factory() as db, patch.object(jobs, "seed_companies", side_effect=lambda *a: calls.append("seed")), patch.object(
+        jobs, "import_directory", side_effect=lambda *a: calls.append("import")
+    ), patch.object(jobs, "match_companies", side_effect=lambda *a: calls.append("match")), patch.object(
+        jobs, "enrich_domains", side_effect=lambda *a: calls.append("domains")
+    ), patch.object(jobs, "discover_feeds", side_effect=lambda *a: calls.append("probe") or []):
+        assert jobs._discover_companies(db, user_id, "RO", timedelta(minutes=30)) == []
+    assert calls == ["seed", "import", "match", "domains", "probe"]
+
+
+def test_a_failed_directory_step_does_not_keep_logos_or_probes_from_running(session_factory):
+    user_id = add_user(session_factory, "a@example.com")
+    calls = []
+    with session_factory() as db, patch.object(jobs, "seed_companies"), patch.object(
+        jobs, "import_directory", side_effect=RuntimeError("github down")
+    ), patch.object(jobs, "match_companies"), patch.object(jobs, "enrich_domains", side_effect=lambda *a: calls.append("domains")), patch.object(
+        jobs, "discover_feeds", side_effect=lambda *a: calls.append("probe") or []
+    ):
+        jobs._discover_companies(db, user_id, "RO", timedelta(minutes=30))
+    assert calls == ["domains", "probe"]

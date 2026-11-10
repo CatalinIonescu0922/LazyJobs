@@ -4,7 +4,7 @@ import time
 from collections import Counter
 from datetime import timedelta
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -12,7 +12,8 @@ from ..llm import propose_domains
 from ..logging import logger
 from ..models import Company, Job, JobSource, utcnow
 from ..textnorm import normalise
-from .ats import _domain_label, find_feed_for_company, source_domain
+from .ats import _domain_label, careers_url, find_feed_for_board, find_feed_for_company, source_domain
+from .directory import READABLE
 from .fetch import FetchError, SafeFetcher
 
 MAX_DOMAIN_LOOKUPS = 40
@@ -64,7 +65,8 @@ def discover_feeds(db: Session, user_id: int, country: str, tick: timedelta) -> 
             Company.user_id == user_id,
             or_(Company.status == "unchecked", and_(Company.status == "none", Company.checked_at < utcnow() - RECHECK_AFTER)),
         )
-        .order_by(Company.postings.desc(), Company.id)
+        # A company the directory lists on a provider we can read goes first: its board is known, not guessed.
+        .order_by(case((Company.board_provider.in_(READABLE), 0), else_=1), Company.postings.desc(), Company.id)
         .limit(probes_per_tick(total, tick))
     ).all()
     fetcher = SafeFetcher(GREENHOUSE_API)
@@ -73,7 +75,10 @@ def discover_feeds(db: Session, user_id: int, country: str, tick: timedelta) -> 
         if position:
             time.sleep(PAUSE_SECONDS)
         try:
-            feed = find_feed_for_company(company.name, country, fetcher)
+            if company.board_provider in READABLE:
+                feed = find_feed_for_board(company.board_provider, company.board_token or "", country, fetcher)
+            else:
+                feed = find_feed_for_company(company.name, country, fetcher)
         except FetchError as exc:
             # A block or a failed connection says nothing about the company, so it stays unchecked.
             logger.warning("Company discovery stopped: user_id=%s reason=%s", user_id, exc)
@@ -88,7 +93,7 @@ def discover_feeds(db: Session, user_id: int, country: str, tick: timedelta) -> 
             source = JobSource(
                 user_id=user_id,
                 domain=domain,
-                source_url=f"https://boards.greenhouse.io/{feed.slug}",
+                source_url=careers_url(feed),
                 kind="employer",
                 ats_provider=feed.provider,
                 ats_slug=feed.slug,

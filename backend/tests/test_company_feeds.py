@@ -94,3 +94,51 @@ def test_the_source_domain_is_unique_per_company_and_per_workday_site():
     other = parse_ats_url("https://accenture.wd103.myworkdayjobs.com/AvanadeCareers")
     assert source_domain(one) == "accenturecareers.accenture.myworkdayjobs.com"
     assert source_domain(one) != source_domain(other)
+
+
+def board_api(responses: dict):
+    fake, requested = board(responses)
+    return fake, requested
+
+
+def verify(provider: str, token: str, responses: dict, country: str = "RO"):
+    fake, requested = board_api(responses)
+    with patch.object(ats, "_get_json", fake), patch.object(ats, "SafeFetcher"):
+        return ats.find_feed_for_board(provider, token, country, MagicMock()), requested
+
+
+def test_a_directory_greenhouse_board_with_a_job_in_the_country_is_accepted_without_a_name_check():
+    feed, requested = verify("greenhouse", "veeamsoftware", {f"{BASE}/veeamsoftware/jobs": jobs_in("Bucharest, Romania")})
+    assert feed == Feed("greenhouse", "veeamsoftware")
+    assert requested == [f"{BASE}/veeamsoftware/jobs"]
+
+
+def test_a_directory_board_with_no_job_in_the_country_or_that_is_gone_is_rejected():
+    assert verify("greenhouse", "wise", {f"{BASE}/wise/jobs": jobs_in("London, United Kingdom")})[0] is None
+    assert verify("greenhouse", "gone", {})[0] is None
+
+
+def test_a_block_on_a_directory_board_is_not_swallowed():
+    fake, _ = board({f"{BASE}/nebius/jobs": FetchError("blocked (429)")})
+    with patch.object(ats, "_get_json", fake), pytest.raises(FetchError):
+        ats.find_feed_for_board("greenhouse", "nebius", "RO", MagicMock())
+
+
+def test_a_directory_workday_triple_becomes_the_feed_slug_and_reads_its_own_host():
+    fetchers = []
+    with patch.object(ats, "SafeFetcher", side_effect=lambda host: fetchers.append(host) or MagicMock()), patch.object(ats, "_rejection", return_value=None) as rejection:
+        feed = ats.find_feed_for_board("workday", "wd1/danaher/DanaherJobs", "ro", MagicMock())
+    assert feed == Feed("workday", "danaher.wd1/DanaherJobs")
+    assert fetchers == ["danaher.wd1.myworkdayjobs.com"]
+    assert rejection.call_args.args[2:] == ("RO", None)
+
+
+@pytest.mark.parametrize("provider, token", [("workday", "danaher/DanaherJobs"), ("workable", "european-dynamics"), ("ashby", "plaid"), ("lever", "x")])
+def test_a_board_we_cannot_read_or_a_malformed_workday_token_gives_no_feed(provider, token):
+    assert ats.find_feed_for_board(provider, token, "RO", MagicMock()) is None
+
+
+def test_careers_urls_point_at_each_providers_public_page():
+    assert ats.careers_url(Feed("greenhouse", "emag")) == "https://boards.greenhouse.io/emag"
+    assert ats.careers_url(Feed("workday", "danaher.wd1/DanaherJobs")) == "https://danaher.wd1.myworkdayjobs.com/DanaherJobs"
+    assert ats.careers_url(Feed("smartrecruiters", "BoschGroup")) == "https://jobs.smartrecruiters.com/BoschGroup"

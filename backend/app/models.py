@@ -135,8 +135,27 @@ class Company(Base):
     ats_slug: Mapped[str] = mapped_column(String(255), default="")
     # None means nobody has asked yet; "" means it was asked and no domain is known.
     domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The board the published directory lists under this company's name: None means not matched yet, "" no match.
+    board_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    board_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AtsBoard(Base):
+    """One company job board from the published directory of ATS boards."""
+
+    __tablename__ = "ats_boards"
+    __table_args__ = (UniqueConstraint("provider", "token", name="uq_ats_board_provider_token"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    token: Mapped[str] = mapped_column(String(255))
+    company: Mapped[str] = mapped_column(String(255), default="")
+    key: Mapped[str] = mapped_column(String(255), index=True)
+    token_key: Mapped[str] = mapped_column(String(255), index=True)
+    open_roles: Mapped[int] = mapped_column(default=0)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 # Review queue: a match becomes an application only once the user submits it themselves.

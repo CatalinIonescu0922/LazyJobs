@@ -336,3 +336,50 @@ def test_a_handful_of_new_companies_waits_for_a_worthwhile_batch_before_the_mode
         add_company(db, user_id, "The Tenth One", 1)
         db.commit()
         lookup(db, user_id, lambda names, country: [], minimum=discovery.MIN_DOMAIN_BATCH)[1].assert_called_once()
+
+
+def hinted(db, user_id: int, name: str, postings: int, provider: str, token: str) -> None:
+    db.add(Company(user_id=user_id, key=name.lower(), name=name, postings=postings, board_provider=provider, board_token=token))
+
+
+def test_a_company_with_a_readable_directory_board_is_probed_first_and_through_that_board(session_factory):
+    with session_factory() as db:
+        user_id = make_user(db)
+        add_company(db, user_id, "Big Unhinted", 99)
+        hinted(db, user_id, "Small Hinted", 1, "greenhouse", "smallhinted")
+        db.commit()
+        order = []
+        with patch.object(discovery, "find_feed_for_board", side_effect=lambda provider, token, country, fetcher: order.append(("board", token))) as board_probe, patch.object(
+            discovery, "find_feed_for_company", side_effect=lambda name, country, fetcher: order.append(("name", name))
+        ), patch.object(discovery.time, "sleep"), patch.object(discovery, "SafeFetcher"):
+            discovery.discover_feeds(db, user_id, "RO", WHOLE_PERIOD)
+        assert order == [("board", "smallhinted"), ("name", "Big Unhinted")]
+        assert board_probe.call_args.args[:3] == ("greenhouse", "smallhinted", "RO")
+
+
+def test_a_board_on_a_provider_we_cannot_read_does_not_jump_the_queue_and_is_probed_by_name(session_factory):
+    with session_factory() as db:
+        user_id = make_user(db)
+        add_company(db, user_id, "Plain Corp", 5)
+        hinted(db, user_id, "On Ashby", 1, "ashby", "onashby")
+        db.commit()
+        order = []
+        with patch.object(discovery, "find_feed_for_board") as board_probe, patch.object(
+            discovery, "find_feed_for_company", side_effect=lambda name, country, fetcher: order.append(name)
+        ), patch.object(discovery.time, "sleep"), patch.object(discovery, "SafeFetcher"):
+            discovery.discover_feeds(db, user_id, "RO", WHOLE_PERIOD)
+        assert order == ["Plain Corp", "On Ashby"]
+        board_probe.assert_not_called()
+
+
+def test_a_feed_found_through_the_directory_gets_the_providers_careers_url_and_a_workday_domain(session_factory):
+    with session_factory() as db:
+        user_id = make_user(db)
+        hinted(db, user_id, "Danaher", 3, "workday", "wd1/danaher/DanaherJobs")
+        db.commit()
+        feed = Feed("workday", "danaher.wd1/DanaherJobs")
+        with patch.object(discovery, "find_feed_for_board", return_value=feed), patch.object(discovery.time, "sleep"), patch.object(discovery, "SafeFetcher"):
+            created = discovery.discover_feeds(db, user_id, "RO", WHOLE_PERIOD)
+        assert [(source.domain, source.source_url, source.ats_slug) for source in created] == [
+            ("danaherjobs.danaher.myworkdayjobs.com", "https://danaher.wd1.myworkdayjobs.com/DanaherJobs", "danaher.wd1/DanaherJobs")
+        ]

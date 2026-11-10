@@ -19,6 +19,7 @@ from ..session import current_user
 from ..textnorm import fingerprint
 from ..sources.aggregator import refresh_aggregator_source
 from ..sources.crawl import refresh_source
+from ..sources.directory import import_directory, match_companies
 from ..sources.discovery import discover_feeds, enrich_domains, seed_companies
 from ..sources.career import refresh_career_source
 
@@ -192,7 +193,13 @@ def _discover_companies(db: Session, user_id: int, country: str, tick: timedelta
         logger.exception("Company discovery failed: user_id=%s", user_id)
         db.rollback()
         return []
-    # The logo lookup is cosmetic, so its failure never keeps a feed from being found.
+    # The directory and the logo lookup only help, so their failure never keeps a feed from being found.
+    try:
+        import_directory(db)
+        match_companies(db, user_id)
+    except Exception:
+        logger.exception("Directory matching failed: user_id=%s", user_id)
+        db.rollback()
     try:
         enrich_domains(db, user_id, country)
     except Exception:
