@@ -114,7 +114,7 @@ The reason is shown in the Sources screen. What each one means:
 | `sitemap has no postings from the last 180 days` | The sitemap is an archive. |
 | `linked X feed has no posting in your country or cannot be read` | The careers page links to a Greenhouse, SmartRecruiters or Workday feed that `find_feed` rejected; the log line `ATS feed rejected` has the exact cause. |
 | `set a job title and a country in your profile` | An aggregator source searches by the profile's first two titles and its country, and one of them is empty. |
-| `last refresh failed: X` | An aggregator that has worked before hit an error (a 429, say). It stays active so the next scheduled run tries again; a first failure marks it failed instead. |
+| `last refresh failed: X` | An aggregator or an ATS-backed employer source hit an error (a 429, say). It keeps its status so the next scheduled run, an interval later, tries again. An aggregator's very first failure marks it failed instead. |
 | `careers site uses X, which is not supported yet` | The careers page links to an ATS that has no reader here. |
 | `needs browser rendering` | The page is a script shell (phase 19). |
 | `no JobPosting data found` | An employer page with no JSON-LD and no recognisable ATS. |
@@ -267,6 +267,50 @@ While the app runs, a background task refreshes sources so jobs accumulate witho
 - On Cloud Run the app scales to zero and a loop inside it cannot be relied on. Set
   `REFRESH_INTERVAL_HOURS=0` there and call `refresh_due_sources` from the scheduled job
   (phase 14).
+
+## Company discovery (`discovery.py`, `Company`)
+
+The Romanian boards only show who is hiring, but an employer's own ATS board is richer and keeps
+its direct apply link. To find those boards at scale the app keeps a list of companies that hire in
+the user's country and works out, one at a time, which of them have a feed it may read.
+
+- `seed_companies` fills the `companies` table (one row per user and normalised name) from the
+  stored postings of the user's active `board` and `aggregator` sources that are open to the
+  profile's country: a country-restricted posting must name it, an unrestricted one counts.
+  Legal suffixes are dropped so "Bosch Romania" and "BOSCH ROMANIA SRL" are one company, and
+  `postings` is how many stored postings it has. Employer sources are skipped because their feed is
+  already read; names under 4 characters and "Confidential" are skipped.
+- `discover_feeds` probes the companies with the most postings first, at most 20 per run. A
+  company is `unchecked`, `feed` (a source was created) or `none`. A `none` company is asked
+  again only after 30 days; a `feed` company is never probed again.
+- A probe tries up to two Greenhouse slugs made from the name (the whole name without legal
+  suffixes, and its first word if it has 4 letters or more) and accepts a board only if it has a
+  posting in the country and its name agrees with the slug. That is the same check `find_feed`
+  uses, and it is what rejects a different company with the same name. Greenhouse is the only
+  provider probed: SmartRecruiters refuses us, a Workday tenant and site cannot be guessed
+  from a name, and no real Lever or Workable board turned up in testing.
+- Probing is slow on purpose: one fetcher for the whole run, at least a second between
+  requests and a further second between companies, so a run is roughly 60 requests. A block
+  (429, 403) or a failed connection stops the run and leaves the remaining companies
+  `unchecked`; it never marks a company `none`.
+- A found feed becomes an `employer` source with its provider and slug already set and is
+  refreshed in the same run.
+- It runs from the scheduled refresh, on a tick that refreshes sources, so twice a day and not
+  every half hour. A failure in discovery is logged and does not stop the refresh.
+- The list is stored, not recomputed: `companies` is in Postgres, in the `lazyjobs_pgdata` volume,
+  and survives `docker compose down` and a rebuild; only `down -v` removes it. Every probe answer
+  is kept (`feed` or `none` with `checked_at`), seeding never resets a checked company, and rows
+  are never deleted, so the days of probing are not repeated.
+- A found company stays on the 12-hour schedule. Its source starts as a `candidate` with the
+  provider and slug already set, is refreshed in the run that found it, and is then refreshed
+  whenever `last_refreshed_at` is older than the interval, like any active source. A failed
+  refresh of a feed-backed source (a 429, a dropped connection) does not mark it `failed`: it keeps
+  its status, records `last refresh failed: ...`, and stamps `last_refreshed_at` as the attempt, so
+  the next try is a full interval later and a permanent refusal costs about two requests a day. A
+  user who disables a source is respected: it is not refreshed and its company is not probed again.
+- Measured on 2026-11-10 on the 34 largest companies in the stored board postings: 2 had a
+  readable Greenhouse board with Romanian postings, Veeam (15) and eMAG (18), about 6%. Model-named
+  companies gave none in 50.
 
 ## Safety rules
 

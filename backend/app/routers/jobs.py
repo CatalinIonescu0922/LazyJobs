@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -18,6 +18,7 @@ from ..session import current_user
 from ..textnorm import fingerprint
 from ..sources.aggregator import refresh_aggregator_source
 from ..sources.crawl import refresh_source
+from ..sources.discovery import discover_feeds, seed_companies
 from ..sources.career import refresh_career_source
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -145,13 +146,15 @@ def refresh_due_sources(max_age: timedelta) -> None:
             due = db.scalars(
                 select(JobSource).where(
                     JobSource.user_id == user.id,
-                    JobSource.status == "active",
+                    # A feed found by discovery is a candidate until its first refresh succeeds, and is retried like an active one.
+                    or_(JobSource.status == "active", and_(JobSource.status == "candidate", JobSource.ats_provider != "")),
                     or_(JobSource.last_refreshed_at.is_(None), JobSource.last_refreshed_at < cutoff),
                 )
             ).all()
             if due:
                 logger.info("Scheduled refresh started: user_id=%s due_sources=%s", user.id, [source.domain for source in due])
-                _run_refresh(user.id, profile, due)
+                # Discovery runs only on a tick that refreshes, so it happens twice a day and not every half hour.
+                _run_refresh(user.id, profile, [*due, *_discover_companies(db, user.id, profile.country)])
     finally:
         db.close()
         _refresh_lock.release()
@@ -163,6 +166,16 @@ def refresh_any(db: Session, source: JobSource, country: str, city: str, terms: 
     if source.kind in {"career", "employer"}:
         return refresh_career_source(db, source, country, city)
     return refresh_source(db, source, terms)
+
+
+def _discover_companies(db: Session, user_id: int, country: str) -> list[JobSource]:
+    try:
+        seed_companies(db, user_id, country)
+        return discover_feeds(db, user_id, country)
+    except Exception:
+        logger.exception("Company discovery failed: user_id=%s", user_id)
+        db.rollback()
+        return []
 
 
 def _refresh_one_source(source_id: int, country: str, city: str, terms: list[str], titles: list[str]) -> dict[str, int | str]:

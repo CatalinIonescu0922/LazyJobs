@@ -102,8 +102,14 @@ def refresh_career_source(db: Session, source: JobSource, country: str = "", cit
         logger.info("Career source refreshed: source=%s pages=%s added=%s status=%s", source.domain, len(pages), added, source.status)
         return {"source_id": source.id, "status": source.status, "added": added, "updated": 0, "failed": 0, "reason": source.reason}
     except FetchError as exc:
-        source.status = "failed"
-        source.reason = str(exc)
+        if source.ats_provider:
+            # A feed that was verified once stays on the schedule, so one 429 does not drop it for good.
+            # last_refreshed_at is stamped as the last attempt, which makes the next try wait a full interval.
+            source.reason = f"last refresh failed: {exc}"
+            source.last_refreshed_at = utcnow()
+        else:
+            source.status = "failed"
+            source.reason = str(exc)
         db.commit()
         return {"source_id": source.id, "status": source.status, "added": 0, "updated": 0, "failed": 1, "reason": source.reason}
 

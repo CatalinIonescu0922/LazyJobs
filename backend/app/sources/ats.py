@@ -13,6 +13,7 @@ import pycountry
 from bs4 import BeautifulSoup
 
 from ..logging import logger
+from ..textnorm import normalise
 from .extract import _as_list, _clean, _date, _salary
 from .fetch import FetchError, SafeFetcher
 from .posting import Posting
@@ -22,6 +23,7 @@ GREENHOUSE = "greenhouse"
 WORKDAY = "workday"
 
 _API_HOSTS = {SMARTRECRUITERS: "api.smartrecruiters.com", GREENHOUSE: "boards-api.greenhouse.io"}
+_SOURCE_DOMAINS = {SMARTRECRUITERS: "smartrecruiters.com", GREENHOUSE: "greenhouse.io", WORKDAY: "myworkdayjobs.com"}
 _API_BASES = {
     SMARTRECRUITERS: "https://api.smartrecruiters.com/v1/companies",
     GREENHOUSE: "https://boards-api.greenhouse.io/v1/boards",
@@ -120,6 +122,42 @@ def read_feed(feed: Feed, domain: str, country: str, known: set[str], limit: int
     if feed.provider == WORKDAY:
         return _read_workday(feed.slug, domain, country.upper(), known, limit, city)
     raise ValueError(f"unknown ATS provider: {feed.provider}")
+
+
+def find_feed_for_company(name: str, country: str, fetcher: SafeFetcher) -> Feed | None:
+    # Greenhouse only: SmartRecruiters refuses us by robots.txt, and a Workday tenant and site cannot be guessed from a name.
+    def api(url: str, body: dict | None = None) -> dict:
+        return _get_json(fetcher, url, body)
+
+    for slug in _name_slugs(name):
+        feed = Feed(GREENHOUSE, slug)
+        try:
+            reason = _rejection(feed, api, country.upper(), slug)
+        except FetchError as exc:
+            if str(exc) != "source returned 404":
+                raise
+            reason = "no board with that name"
+        if reason is None:
+            logger.info("ATS feed accepted: company=%s provider=%s slug=%s", name, feed.provider, feed.slug)
+            return feed
+        logger.info("ATS feed rejected: company=%s provider=%s slug=%s reason=%s", name, feed.provider, feed.slug, reason)
+    return None
+
+
+def source_domain(feed: Feed) -> str:
+    # A company on an ATS has no domain of its own, and job_sources needs one that is unique per company.
+    if feed.provider == WORKDAY:
+        # A Workday tenant can run several careers sites, so the site name is part of the identity.
+        tenant_cluster, site = feed.slug.split("/", 1)
+        return f"{site.lower()}.{tenant_cluster.split('.')[0]}.{_SOURCE_DOMAINS[WORKDAY]}"
+    return f"{feed.slug.lower()}.{_SOURCE_DOMAINS[feed.provider]}"
+
+
+def _name_slugs(name: str) -> list[str]:
+    words = normalise(name).split()
+    words = [word for word in words if word not in {"romania", "romanian"}] or words
+    first = words[0] if words and len(words[0]) >= 4 else ""
+    return [slug for slug in dict.fromkeys(["".join(words), first]) if slug and _SLUG.fullmatch(slug)]
 
 
 def _feed(provider: str, candidates: list[str]) -> Feed | None:

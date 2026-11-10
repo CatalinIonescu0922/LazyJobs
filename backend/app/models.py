@@ -119,6 +119,24 @@ class JobSource(Base):
     user: Mapped[User] = relationship()
 
 
+class Company(Base):
+    """A company seen hiring in the user's country, and what is known about its ATS feed."""
+
+    __tablename__ = "companies"
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_user_company_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    key: Mapped[str] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(255))
+    postings: Mapped[int] = mapped_column(default=0)
+    status: Mapped[str] = mapped_column(String(16), default="unchecked", index=True)
+    ats_provider: Mapped[str] = mapped_column(String(32), default="")
+    ats_slug: Mapped[str] = mapped_column(String(255), default="")
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 # Review queue: a match becomes an application only once the user submits it themselves.
 # Valid transitions between these are enforced in the applications API, not here.
 class ApplicationStatus(str, Enum):

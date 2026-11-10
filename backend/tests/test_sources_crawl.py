@@ -190,14 +190,13 @@ def test_missing_sitemap_names_the_cause():
 
 
 def test_pasted_workday_url_gets_one_domain_per_careers_site():
-    from app.routers.sources import _ats_domain
-    from app.sources.ats import parse_ats_url
+    from app.sources.ats import parse_ats_url, source_domain
 
     feed = parse_ats_url("https://accenture.wd103.myworkdayjobs.com/en-US/AccentureCareers/job/x")
-    assert _ats_domain(feed) == "accenturecareers.accenture.myworkdayjobs.com"
+    assert source_domain(feed) == "accenturecareers.accenture.myworkdayjobs.com"
     other = parse_ats_url("https://accenture.wd103.myworkdayjobs.com/AvanadeCareers")
-    assert _ats_domain(other) != _ats_domain(feed)
-    assert _ats_domain(parse_ats_url("https://boards.greenhouse.io/BearingPoint")) == "bearingpoint.greenhouse.io"
+    assert source_domain(other) != source_domain(feed)
+    assert source_domain(parse_ats_url("https://boards.greenhouse.io/BearingPoint")) == "bearingpoint.greenhouse.io"
 
 
 def test_career_failure_reason_names_an_unsupported_ats_and_a_rejected_linked_feed():

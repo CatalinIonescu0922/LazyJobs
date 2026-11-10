@@ -72,7 +72,8 @@ undo that, as the comment in `docker-compose.yml` explains.
 While the app runs it refreshes its active sources every `REFRESH_INTERVAL_HOURS` (default 12,
 0 disables; see `docs/sources.md`). The first run starts a minute after startup, and it
 crawls every source that is more than that old, so expect traffic and model calls after a
-restart that follows a long pause.
+restart that follows a long pause. Each of those runs also probes up to 20 unchecked companies against
+Greenhouse to find employer feeds.
 
 Backend tests run in the app image, from a directory other than `backend/` so the
 Settings class does not read `backend/.env`:
