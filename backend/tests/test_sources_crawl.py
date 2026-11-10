@@ -304,3 +304,49 @@ def test_hiring_cafe_is_refused_under_both_of_its_domains():
     assert _is_unsupported("hiring.cafe")
     assert _is_unsupported("www.hiringcafe.com".removeprefix("www."))
     assert not _is_unsupported("ejobs.ro")
+
+
+def test_urls_that_were_gone_or_not_postings_are_not_asked_for_again():
+    gone = [f"https://board.ro/locuri/gone-{n}" for n in range(2)]
+    closed = [f"https://board.ro/locuri/closed-{n}" for n in range(2)]
+    live = [f"https://board.ro/locuri/live-{n}" for n in range(2)]
+    pages = {"https://board.ro/sitemap.xml": urlset(*gone, *closed, *live), **{url: LANDING_PAGE for url in closed}, **{url: POSTING_PAGE for url in live}}
+
+    def run() -> tuple[dict, list[str]]:
+        fetcher = FakeFetcher(pages)
+        source = JobSource(id=1, domain="board.ro", sitemap_url="https://board.ro/sitemap.xml", kind="board", status="active", reason="", extraction="jsonld", posting_prefix="https://board.ro/locuri/")
+        db = MagicMock()
+        db.scalars.return_value = []
+        db.scalar.return_value = None
+        with patch.object(crawl, "SafeFetcher", return_value=fetcher):
+            return crawl.refresh_source(db, source, []), fetcher.requested
+
+    first, first_requests = run()
+    assert first["failed"] == 4 and first["added"] == 2
+    second, second_requests = run()
+    asked_again = [url for url in second_requests if url in gone + closed]
+    assert asked_again == []
+    assert second["failed"] == 0
+
+
+def test_a_block_is_not_remembered_as_a_dead_page():
+    page = "https://board.ro/locuri/blocked-1"
+
+    class Blocking(FakeFetcher):
+        def get(self, url, *, sitemap=False):
+            if url == page:
+                self.requested.append(url)
+                raise FetchError("blocked (429)")
+            return super().get(url, sitemap=sitemap)
+
+    def run() -> list[str]:
+        fetcher = Blocking({"https://board.ro/sitemap.xml": urlset(page)})
+        source = JobSource(id=1, domain="board.ro", sitemap_url="https://board.ro/sitemap.xml", kind="board", status="active", reason="", extraction="jsonld", posting_prefix="")
+        db = MagicMock()
+        db.scalars.return_value = []
+        with patch.object(crawl, "SafeFetcher", return_value=fetcher):
+            crawl.refresh_source(db, source, [])
+        return fetcher.requested
+
+    assert page in run()
+    assert page in run()

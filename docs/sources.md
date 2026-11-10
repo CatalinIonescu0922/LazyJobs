@@ -86,6 +86,12 @@ reaches past the freshest window, because the best slug match in a whole sitemap
 an expired posting. The ranking is a hint and not a filter; the job search applies its own
 profile filter afterwards.
 
+A posting page that answers 404 or 410, or that is not a posting (no JSON-LD, or the model says
+so), is remembered per source in memory and not requested again until the app restarts. A
+closed posting stays in the sitemap, and without this every scheduled run re-asks for the same
+dead pages: RemoteOK showed 95 failures in every 100 requests on 2026-11-10. A block (403,
+429) is not remembered, since the page may be fine.
+
 A sitemap's URLs are also grouped by top folder during validation, job-looking folders
 first and at most two groups, because a flat sitemap can hold postings next to company and
 article pages.

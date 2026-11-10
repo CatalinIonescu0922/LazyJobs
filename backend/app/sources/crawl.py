@@ -28,6 +28,12 @@ SAMPLES = 3
 
 Entry = tuple[str, str | None]
 
+# Postings that were gone (404, 410) or were not a posting, per source. A closed posting stays in the
+# sitemap and does not come back, so without this every scheduled run asks for the same dead pages again,
+# which is wasted traffic and, on the model tier, wasted paid calls. It is forgotten when the app restarts.
+_dead: dict[str, set[str]] = {}
+_GONE = {"source returned 404", "source returned 410"}
+
 # Sitemap files named like these list landing pages, not postings. "by" catches the
 # jobs_by_city and jobs_by_employer style that boards use for their landing pages.
 _NOT_POSTINGS = ("tag", "user", "compan", "employer", "cit", "domain", "skill", "article", "page", "general", "section", "categor", "predefined", "expired", "blog", "news")
@@ -130,17 +136,21 @@ def refresh_source(db: Session, source: JobSource, terms: list[str] | None = Non
 
     entries = _posting_entries(fetcher, source, terms)
     stored = set(db.scalars(select(Job.external_id).where(Job.source == source.domain)))
-    fresh = list(dict.fromkeys(entry for entry in _recent(entries) if entry[0].startswith(source.posting_prefix) and urldefrag(entry[0])[0] not in stored))
+    dead = _dead.setdefault(source.domain, set())
+    fresh = list(dict.fromkeys(entry for entry in _recent(entries) if entry[0].startswith(source.posting_prefix) and urldefrag(entry[0])[0] not in stored and entry[0] not in dead))
     extractor, cap = (extract_llm, MAX_LLM_POSTINGS) if source.extraction == "llm" else (extract_jsonld, MAX_POSTINGS)
     added = failed = 0
     for url, _ in _rank(fresh, terms)[:cap]:
         try:
             posting = extractor(fetcher.get(url).content, url=url, source=source.domain)
-        except FetchError:
+        except FetchError as exc:
             failed += 1
+            if str(exc) in _GONE:
+                dead.add(url)
             continue
         if not posting or not posting.title or not posting.description:
             failed += 1
+            dead.add(url)
             continue
         try:
             with db.begin_nested():
