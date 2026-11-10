@@ -1,7 +1,7 @@
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +15,8 @@ from ..logging import logger, timed
 from ..models import Job, JobSource, Profile, User, utcnow
 from ..schemas import JobResponse, JobSearchRequest, JobSearchResponse
 from ..session import current_user
+from ..textnorm import fingerprint
+from ..sources.aggregator import refresh_aggregator_source
 from ..sources.crawl import refresh_source
 from ..sources.career import refresh_career_source
 
@@ -151,7 +153,9 @@ def _search(db: Session, user: User, profile: Profile, request: JobSearchRequest
     domains = [source.domain for source in sources]
     if not domains:
         return JobSearchResponse(jobs=[])
-    jobs = db.scalars(select(Job).where(Job.source.in_(domains)).order_by(Job.posted_at.desc().nullslast(), Job.first_seen_at.desc()).limit(500)).all()
+    loaded = db.scalars(select(Job).where(Job.source.in_(domains)).order_by(Job.posted_at.desc().nullslast(), Job.first_seen_at.desc()).limit(500)).all()
+    jobs = _without_duplicates(loaded, {source.domain for source in sources if source.kind in {"employer", "career"}})
+    logger.info("Job deduplication: user_id=%s loaded=%s kept=%s", user.id, len(loaded), len(jobs))
     query = request.query.strip().lower()
     location = (request.location.strip() or ("" if request.mode == "all" else profile.city or (profile.preferred_locations or [""])[0])).lower()
     profile_terms = _profile_terms(profile)
@@ -225,6 +229,29 @@ def _profile_terms(profile: Profile) -> list[str]:
 
 
 def _job_response(job: Job) -> JobResponse:
+def _without_duplicates(jobs: list[Job], employer_domains: set[str]) -> list[Job]:
+    # A job with no company name has nothing to tell it apart from another employer's, so it is never merged.
+    keyed = [(job, _same_job_key(job) if job.company.strip() else f"unnamed:{position}") for position, job in enumerate(jobs)]
+    best: dict[str, Job] = {}
+    for job, key in keyed:
+        current = best.get(key)
+        if current is None or _preference(job, employer_domains) < _preference(current, employer_domains):
+            best[key] = job
+    return [job for job, key in keyed if best[key] is job]
+
+
+def _same_job_key(job: Job) -> str:
+    # Boards write a location differently ("Bucuresti, Bucuresti, RO" against "BUCURESTI ,, RO"),
+    # so only the city name is compared, not the whole address that the stored fingerprint uses.
+    city = (job.locations or [""])[0].split(",")[0]
+    return fingerprint(job.company, job.title, city)
+
+
+def _preference(job: Job, employer_domains: set[str]) -> tuple[bool, datetime]:
+    # The employer's own posting carries its direct apply link; otherwise the earliest one seen is the original.
+    return job.source not in employer_domains, job.first_seen_at
+
+
     return JobResponse(
         id=job.id,
         title=job.title,

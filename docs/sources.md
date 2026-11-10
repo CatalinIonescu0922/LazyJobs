@@ -206,14 +206,35 @@ Descriptions are converted to plain text before storage. JSON-LD is searched rec
 including `@graph`; remote roles, eligible countries, dates, and salary values are mapped
 into the common `Posting` model. Salary values are normalised to monthly amounts.
 
-`textnorm.fingerprint` normalises company, title, and city so later matching can collapse
-cross-board duplicates. `first_seen_at` is set only when a job is first inserted.
+`first_seen_at` is set only when a job is first inserted. `Job.fingerprint` is
+`textnorm.fingerprint` of company, title and the whole first location string; nothing
+reads it yet.
 
 The crawler does not use browser rendering. Playwright is the right open-source renderer
 for a script shell, and it must retain the same HTTPS, robots, host, DNS, redirect, and
 response-size guards as `SafeFetcher`. Page text sent to the model is untrusted input: its
 output is parsed into fixed, length-capped fields and is never executed or rendered as
 HTML.
+
+## Duplicate postings (`routers/jobs.py`)
+
+The job search hides postings of the same job before it filters, so a job listed twice, on
+one board under two URLs or on two boards, appears once. Nothing is deleted from `jobs`;
+the duplicates stay stored and only the search skips them, over the 500 newest rows it
+loads.
+
+- Two postings are the same job when `fingerprint(company, title, city)` matches, where
+  city is the first location up to its first comma. The stored `Job.fingerprint` is not
+  used because boards write an address differently (`Bucuresti, Bucuresti, RO` against
+  `BUCURESTI ,, RO`), so the same job would never match across boards.
+- Of a group, the posting from an `employer` or `career` source is kept, because it has the
+  company's own apply link; otherwise the one with the earliest `first_seen_at`, which is
+  the original and not a repost.
+- The same title in another city or at another company is a different job. A posting with
+  no company name is never merged, because nothing tells it apart from another employer's.
+- Limits: matching is on normalised text only (legal suffixes dropped, accents and
+  punctuation folded). `Bucharest` and `Bucuresti` differ, and a company that two boards
+  spell differently (`Societe Generale GSC` against `SOCIETE GENERALE`) does not merge.
 
 ## Operation
 
