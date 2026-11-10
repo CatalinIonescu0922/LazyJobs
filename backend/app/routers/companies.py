@@ -8,9 +8,10 @@ from ..db import get_db
 from ..models import Company, JobSource, User
 from ..schemas import CompaniesResponse, CompanyCard, CompanyCounts, FeedCard
 from ..session import current_user
+from ..sources.directory import READABLE
 
 router = APIRouter(prefix="/api/companies", tags=["companies"])
-PROVIDER_LABELS = {"greenhouse": "Greenhouse", "workday": "Workday", "smartrecruiters": "SmartRecruiters"}
+PROVIDER_LABELS = {"greenhouse": "Greenhouse", "workday": "Workday", "smartrecruiters": "SmartRecruiters", "ashby": "Ashby", "workable": "Workable", "recruitee": "Recruitee", "lever": "Lever", "personio": "Personio", "rippling": "Rippling"}
 STATUSES = {"all", "feed", "none", "unchecked"}
 MAX_LIMIT = 200
 
@@ -70,6 +71,8 @@ def _company_card(company: Company, source: JobSource | None) -> CompanyCard:
         checked_at=company.checked_at,
         jobs=source.posting_count if source else None,
         source_status=source.status if source else None,
+        known_board=_label(company.board_provider or ""),
+        known_board_readable=(company.board_provider or "") in READABLE,
     )
 
 

@@ -60,6 +60,10 @@ tabs (all, with a feed, no readable feed, not checked yet) and a name search.
   retry button in place of "Show more", so pages never load out of order. The list is keyed by
   `status:search`, so changing the tab or the applied search starts again at the first page.
 - The search is debounced by 300 ms and has no button.
+- A card that is not a feed also says which provider's board the directory lists for the company
+  (`known_board`): "board found on Greenhouse" when we can read that provider and it is still to be
+  probed, "on Workable, no reader yet" when we cannot. That last line is what shows which reader
+  would pay off.
 - A company logo is the image at `logo_url`. When that is empty, or the image fails to load, a rounded
   square with the first two initials is shown, its colour taken from a hash of the name so it is stable.
 - The API sends UTC timestamps without a timezone suffix, so `ago()` appends "Z" before building a

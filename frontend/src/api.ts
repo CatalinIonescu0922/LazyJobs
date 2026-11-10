@@ -216,6 +216,8 @@ export type CompanyCard = {
   checked_at: string | null;
   jobs: number | null;
   source_status: string | null;
+  known_board: string;
+  known_board_readable: boolean;
 };
 
 export type CompaniesResponse = {

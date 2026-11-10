@@ -207,12 +207,25 @@ function CompanyItem({ company }: { company: CompanyCard }) {
           <>
             <span className={chip}>No readable feed</span>
             {company.checked_at && <span className="text-xs text-slate-500">checked {ago(company.checked_at)}</span>}
+            <KnownBoard company={company} />
           </>
         ) : (
-          <span className={chip}>Not checked yet</span>
+          <>
+            <span className={chip}>Not checked yet</span>
+            <KnownBoard company={company} />
+          </>
         )}
       </div>
     </article>
+  );
+}
+
+function KnownBoard({ company }: { company: CompanyCard }) {
+  if (!company.known_board) return null;
+  return (
+    <span className="text-xs text-slate-500">
+      {company.known_board_readable ? `board found on ${company.known_board}` : `on ${company.known_board}, no reader yet`}
+    </span>
   );
 }
 

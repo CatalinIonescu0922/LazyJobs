@@ -14,9 +14,9 @@ def make_user(db, email: str = "a@example.com") -> User:
     return user
 
 
-def company(db, user: User, name: str, postings: int = 1, status: str = "unchecked", domain: str | None = None, provider: str = "", slug: str = "") -> Company:
+def company(db, user: User, name: str, postings: int = 1, status: str = "unchecked", domain: str | None = None, provider: str = "", slug: str = "", board: str | None = None) -> Company:
     item = Company(
-        user_id=user.id, key=name.lower(), name=name, postings=postings, status=status, domain=domain, ats_provider=provider, ats_slug=slug,
+        user_id=user.id, key=name.lower(), name=name, postings=postings, status=status, domain=domain, ats_provider=provider, ats_slug=slug, board_provider=board,
         checked_at=utcnow() if status != "unchecked" else None,
     )
     db.add(item)
@@ -166,3 +166,18 @@ def test_an_unknown_status_is_refused_and_the_page_size_is_clamped(session_facto
         assert len(call(db, user, limit=0).companies) == 1
         assert len(call(db, user, limit=10_000).companies) == 3
         assert len(call(db, user, offset=-5).companies) == 3
+
+
+def test_a_company_reports_the_board_the_directory_knows_and_whether_it_is_readable(session_factory):
+    with session_factory() as db:
+        user = make_user(db)
+        company(db, user, "On Ashby", postings=5, board="ashby")
+        company(db, user, "On Greenhouse", postings=4, board="greenhouse")
+        company(db, user, "Not Listed", postings=3, board="")
+        company(db, user, "Not Matched Yet", postings=2, board=None)
+        db.commit()
+        cards = {card.name: card for card in call(db, user).companies}
+        assert (cards["On Ashby"].known_board, cards["On Ashby"].known_board_readable) == ("Ashby", False)
+        assert (cards["On Greenhouse"].known_board, cards["On Greenhouse"].known_board_readable) == ("Greenhouse", True)
+        for name in ("Not Listed", "Not Matched Yet"):
+            assert (cards[name].known_board, cards[name].known_board_readable) == ("", False)

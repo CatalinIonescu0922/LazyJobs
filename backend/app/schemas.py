@@ -188,6 +188,8 @@ class CompanyCard(BaseModel):
     checked_at: datetime | None
     jobs: int | None
     source_status: str | None
+    known_board: str
+    known_board_readable: bool
 
 
 class CompaniesResponse(BaseModel):
