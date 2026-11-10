@@ -166,6 +166,13 @@ against what actually happened.
   pasted URL; Flex has none in Romania) and the phase 9 LLM tier was built, which turned
   BestJobs and MyJob.ro green. Result: 6 of 21 sources read, 395 postings stored, 33 shown
   for the profile. Decisions in docs/sources.md and the table in BUILD.md.
+- 2026-11-09: Source work continued. Job search now hides duplicate and expired postings.
+  Himalayas, a remote-jobs aggregator with a documented search API, was added as the first
+  `aggregator` source (304 matches for devops in Romania; credit link and closed-job removal
+  follow its terms). hiring.cafe was checked and refused: its pages and API answer an honest
+  crawler with a Cloudflare challenge. Survey of 50 Romanian employers across Greenhouse,
+  Lever, Workable and Recruitee found no Romanian posting. An in-process scheduler now
+  refreshes active sources twice a day (phase 14's Cloud Run job is still not started).
 
 ---
 
