@@ -16,6 +16,7 @@ from ..models import Job, JobSource, Profile, User, utcnow
 from ..schemas import JobResponse, JobSearchRequest, JobSearchResponse
 from ..session import current_user
 from ..textnorm import fingerprint
+from ..sources.aggregator import refresh_aggregator_source
 from ..sources.crawl import refresh_source
 from ..sources.career import refresh_career_source
 
@@ -114,9 +115,10 @@ def _refresh_user_sources_locked(db: Session, user: User, profile: Profile) -> N
 
 def _run_refresh(user_id: int, profile: Profile, sources: list[JobSource]) -> None:
     terms = _profile_terms(profile)
+    titles = list(profile.titles or [])
     with ThreadPoolExecutor(max_workers=settings.crawl_workers, thread_name_prefix="source-refresh") as executor:
         futures = {
-            executor.submit(_refresh_one_source, source.id, profile.country, profile.city, terms): source.domain
+            executor.submit(_refresh_one_source, source.id, profile.country, profile.city, terms, titles): source.domain
             for source in sources
         }
         for future in as_completed(futures):
@@ -155,13 +157,21 @@ def refresh_due_sources(max_age: timedelta) -> None:
         _refresh_lock.release()
 
 
-def _refresh_one_source(source_id: int, country: str, city: str, terms: list[str]) -> dict[str, int | str]:
+def refresh_any(db: Session, source: JobSource, country: str, city: str, terms: list[str], titles: list[str]) -> dict[str, int | str]:
+    if source.kind == "aggregator":
+        return refresh_aggregator_source(db, source, country, titles)
+    if source.kind in {"career", "employer"}:
+        return refresh_career_source(db, source, country, city)
+    return refresh_source(db, source, terms)
+
+
+def _refresh_one_source(source_id: int, country: str, city: str, terms: list[str], titles: list[str]) -> dict[str, int | str]:
     db = SessionLocal()
     try:
         source = db.get(JobSource, source_id)
         if source is None:
             raise RuntimeError(f"source {source_id} disappeared")
-        result = refresh_career_source(db, source, country, city) if source.kind in {"career", "employer"} else refresh_source(db, source, terms)
+        result = refresh_any(db, source, country, city, terms, titles)
         return {**result, "posting_count": source.posting_count}
     except Exception as exc:
         db.rollback()

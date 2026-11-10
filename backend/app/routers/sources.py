@@ -9,9 +9,9 @@ from ..llm import propose_employers, propose_job_boards
 from ..models import JobSource, Profile, User
 from ..schemas import SourceCreate, SourceDiscoveryResponse, SourceResponse, SourceRefreshResponse, SourceUpdate
 from ..session import current_user
+from ..sources.aggregator import AGGREGATORS
 from ..sources.ats import Feed, parse_ats_url
-from ..sources.crawl import refresh_source
-from ..sources.career import refresh_career_source
+from .jobs import refresh_any
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
 # An ATS company has no domain of its own to store, so it gets one that is unique per company.
@@ -20,10 +20,10 @@ UNSUPPORTED_DOMAINS = {
     "linkedin.com",
     "indeed.com",
     "glassdoor.com",
-    "hiring.cafe",
-    "hiringcafe.com",
     "jooble.org",
     "facebook.com",
+    "hiring.cafe",
+    "hiringcafe.com",
 }
 
 
@@ -40,7 +40,7 @@ def add_source(payload: SourceCreate, user: User = Depends(current_user), db: Se
     domain = _ats_domain(feed) if feed else _domain(source_url)
     if _is_unsupported(domain):
         raise HTTPException(status_code=400, detail="This platform is not supported by the safe public crawler")
-    kind = "employer" if feed else (payload.kind if payload.kind in {"board", "career"} else "career")
+    kind = "employer" if feed else "aggregator" if domain in AGGREGATORS else (payload.kind if payload.kind in {"board", "career"} else "career")
     existing = db.scalar(select(JobSource).where(JobSource.user_id == user.id, JobSource.domain == domain, JobSource.kind == kind))
     if existing:
         return _source_response(existing, db)
@@ -122,7 +122,8 @@ def refresh(source_id: int, user: User = Depends(current_user), db: Session = De
     country = profile.country if profile else ""
     city = profile.city if profile else ""
     terms = [*(profile.titles or []), *(profile.skills or [])] if profile else []
-    result = refresh_career_source(db, source, country, city) if source.kind in {"career", "employer"} else refresh_source(db, source, terms)
+    titles = list(profile.titles or []) if profile else []
+    result = refresh_any(db, source, country, city, terms, titles)
     return SourceRefreshResponse.model_validate(result)
 
 

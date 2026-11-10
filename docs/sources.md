@@ -24,6 +24,7 @@ Code lives in `backend/app/sources/`: `fetch.py` (network guard), `crawl.py` (bo
   `{site}.{tenant}.myworkdayjobs.com` (a Workday tenant can run several careers sites).
   Workday cannot be found any other way than a pasted URL or a link on the company's own
   pages, because tenant, cluster and site cannot be guessed from a domain.
+- `POST /api/sources` with `https://himalayas.app` creates an `aggregator` source (below).
 - `POST /api/sources/discover?kind=employers` asks Vertex for up to 15 employers in the
   profile city and country using the candidate's titles and skills, then stores their
   websites as `employer` sources.
@@ -112,6 +113,8 @@ The reason is shown in the Sources screen. What each one means:
 | `job pages have no JobPosting data and the model found no posting in them` | The model tier ran and the sampled pages were not job postings (Wellfound). |
 | `sitemap has no postings from the last 180 days` | The sitemap is an archive. |
 | `linked X feed has no posting in your country or cannot be read` | The careers page links to a Greenhouse, SmartRecruiters or Workday feed that `find_feed` rejected; the log line `ATS feed rejected` has the exact cause. |
+| `set a job title and a country in your profile` | An aggregator source searches by the profile's first two titles and its country, and one of them is empty. |
+| `last refresh failed: X` | An aggregator that has worked before hit an error (a 429, say). It stays active so the next scheduled run tries again; a first failure marks it failed instead. |
 | `careers site uses X, which is not supported yet` | The careers page links to an ATS that has no reader here. |
 | `needs browser rendering` | The page is a script shell (phase 19). |
 | `no JobPosting data found` | An employer page with no JSON-LD and no recognisable ATS. |
@@ -198,6 +201,51 @@ Providers:
 Not covered: SuccessFactors, Oracle Recruiting, Teamtailor, Taleo, iCIMS, Lever, Ashby,
 Workable, Recruitee and custom portals. A careers page that links to one of them
 fails with a reason naming it.
+
+## Aggregator APIs (`aggregator.py`, `himalayas.py`)
+
+A company ATS feed is one employer per request, so it cannot answer "devops jobs in Romania".
+Remote-job aggregators that publish an open API can: they search across companies by
+keyword and country. The one built is Himalayas (`himalayas.app`, source kind `aggregator`),
+a remote-only board, so it adds remote roles and no on-site ones.
+
+- `refresh_aggregator_source` runs one search per profile title (the first two) with the
+  profile's country, 20 jobs a page and at most 3 pages a search, so at most about 120 jobs
+  and 6 requests a run. Two seconds pass between pages and between searches, on top of
+  `SafeFetcher`'s own one-second delay, because every keyless caller shares one allowance
+  and the data only refreshes every 24 hours.
+- The API takes the ISO country code. `country=RO` and `country=Romania` both gave 304 matches
+  for `devops` on 2026-11-09. `locationRestrictions` lists country names, and an empty list
+  means worldwide, which is stored as an empty `eligible_countries`. Names are old ISO names
+  ("Turkey", "Cabo Verde") or not ISO at all ("Kosovo"), so exact `pycountry` names and a
+  one-entry alias are tried before the fuzzy match.
+- `external_id` and `url` are the job's `guid`, a stable himalayas.app URL. `apply_url` is the
+  API's `applicationLink`. Both are required by the terms: every Apply must use that link,
+  the card shows a visible "via Himalayas" credit, and the jobs must not be passed on to other
+  job boards or aggregators.
+- `pubDate` is when the job was last updated, not first posted, so `posted_at` moves forward
+  when the employer edits a job. `salaryPeriod` is sent even without a salary, so a salary is
+  kept only with a known period and a currency, converted to monthly. None of the first 20
+  live jobs stated a salary.
+- Closed jobs must be removed, and a job can close before its `expiryDate`. Each run asks the
+  per-job endpoint about up to 10 stored jobs, the least recently confirmed first, and deletes
+  a job on HTTP 410 (closed) or 404 ("no job at this path in the API", which for a job the feed
+  once listed means it was taken down without a 410; measured on 2026-11-10). If 3 or more
+  checked jobs all report gone and none is open, nothing is deleted, because that looks like a
+  change in the API and not that many closures. `Job.fetched_at` is moved forward when the API
+  still has the job, and it is the only column used for "last confirmed", so for this source it
+  does not mean when the job was first fetched. Any other error (a 429, a block) stops the
+  checks for that run. This is the one place
+  rows are deleted; every other source keeps its postings and only the search hides expired
+  ones.
+- An aggregator that already stored jobs stays `active` after an error, because the schedule
+  skips failed sources.
+
+Jobicy, Remotive and Arbeitnow also publish APIs and are not built. Their published terms:
+Jobicy serves the last 7 days, wants credit and polling at most hourly; Remotive advises at
+most 4 requests a day, delays jobs 24 hours and forbids passing them to other job sites;
+Arbeitnow's site terms restrict commercial use and public display, and it is unclear whether
+they cover the API.
 
 ## Scheduled refresh (`scheduler.py`)
 
