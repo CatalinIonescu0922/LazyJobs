@@ -83,6 +83,11 @@ docker run --rm -e PYTHONPATH=/app -e LOG_FILE=/tmp/test.log -v "$PWD/backend":/
   -w /tmp lazyjobs-app:latest python -m pytest /app/tests -q -p no:cacheprovider
 ```
 
+A test that reaches the network fails: `tests/conftest.py` records every attempt to open a
+connection or resolve a host and asserts there were none, because the code under test swallows
+many errors on purpose. A test that needs HTTP patches the fetcher, or uses the `real_client`
+fixture with `httpx.MockTransport`.
+
 ## Cloud
 
 Nothing is deployed. No GCP project exists yet and nothing is being billed. The design,

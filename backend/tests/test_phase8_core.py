@@ -72,14 +72,13 @@ def test_extract_profile_retries_a_transient_vertex_failure():
     assert create_client.call_count == 2
 
 
-def test_post_json_sends_the_body_and_never_touches_the_cache():
+def test_post_json_sends_the_body_and_never_touches_the_cache(real_client):
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append((request.method, request.content))
         return httpx.Response(200, json={"ok": True})
 
-    real_client = httpx.Client
     fetcher = SafeFetcher("example.com")
     with patch("app.sources.fetch.httpx.Client", side_effect=lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs)), patch.object(
         fetcher, "_allowed", return_value=True
