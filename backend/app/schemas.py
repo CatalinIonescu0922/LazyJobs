@@ -151,3 +151,47 @@ class JobSearchResponse(BaseModel):
     jobs: list[JobResponse]
     refreshed: bool = False
     match_scope: str = "profile_and_location"
+
+
+class CompanyCounts(BaseModel):
+    total: int
+    feed: int
+    none: int
+    unchecked: int
+
+
+class FeedCard(BaseModel):
+    source_id: int
+    name: str
+    provider: str
+    provider_label: str
+    slug: str
+    status: str
+    reason: str
+    jobs: int
+    last_refreshed_at: datetime | None
+    domain: str
+    logo_url: str
+    careers_url: str
+
+
+class CompanyCard(BaseModel):
+    id: int
+    name: str
+    postings: int
+    status: str
+    provider: str
+    provider_label: str
+    slug: str
+    domain: str
+    logo_url: str
+    checked_at: datetime | None
+    jobs: int | None
+    source_status: str | None
+
+
+class CompaniesResponse(BaseModel):
+    counts: CompanyCounts
+    feeds: list[FeedCard]
+    companies: list[CompanyCard]
+    total_matching: int

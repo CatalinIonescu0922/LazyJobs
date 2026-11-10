@@ -335,6 +335,11 @@ the user's country and works out, one at a time, which of them have a feed it ma
   companies null to be asked again, and never stops the feed probe. The logo is the favicon the Google
   service returns for the domain, the same service the job cards already use, and the screen falls back
   to initials when there is no domain or the image does not load.
+- `GET /api/companies?status=all|feed|none|unchecked&search=&limit=60&offset=0` serves the Companies
+  screen: `counts` for every status (ignoring the filter), `feeds` (every employer source read through
+  an ATS feed, freshest first, with its jobs, status and reason; named after its company, or after
+  the Workday tenant when no company matches), `companies` (filtered, sorted by postings then name,
+  paged, at most 200 a page) and `total_matching`. An unknown status is a 400.
 - Measured on 2026-11-10 on the 34 largest companies in the stored board postings: 2 had a
   readable Greenhouse board with Romanian postings, Veeam (15) and eMAG (18), about 6%. Model-named
   companies gave none in 50.
