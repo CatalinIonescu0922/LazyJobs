@@ -1,3 +1,4 @@
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -131,11 +132,19 @@ def _run_refresh(user_id: int, profile: Profile, sources: list[JobSource]) -> No
                 logger.exception("Automatic job refresh failed for source=%s", domain)
 
 
-def refresh_due_sources(max_age: timedelta) -> None:
+def refresh_budget(eligible: int, max_age: timedelta, tick: timedelta) -> int:
+    # A source is refreshed at most once per max_age, and only this many of the due ones per tick, so they
+    # spread over the interval instead of all starting together: with 60 sources, a 12 hour interval and a
+    # tick every 30 minutes that is ceil(60 * 30 min / 12 h) = 3 a tick, and every one still gets its turn.
+    return max(1, math.ceil(eligible * tick / max_age))
+
+
+def refresh_due_sources(max_age: timedelta, tick: timedelta | None = None) -> None:
     # A manual refresh in progress already covers every source, so the scheduled one waits for the next tick.
     if not _refresh_lock.acquire(blocking=False):
         logger.info("Scheduled refresh skipped: a refresh is already running")
         return
+    tick = tick or max_age
     db = SessionLocal()
     try:
         cutoff = utcnow() - max_age
@@ -143,18 +152,26 @@ def refresh_due_sources(max_age: timedelta) -> None:
             profile = db.scalar(select(Profile).where(Profile.user_id == user.id))
             if profile is None or not profile.country:
                 continue
-            due = db.scalars(
+            eligible = db.scalars(
                 select(JobSource).where(
                     JobSource.user_id == user.id,
                     # A feed found by discovery is a candidate until its first refresh succeeds, and is retried like an active one.
                     or_(JobSource.status == "active", and_(JobSource.status == "candidate", JobSource.ats_provider != "")),
-                    or_(JobSource.last_refreshed_at.is_(None), JobSource.last_refreshed_at < cutoff),
                 )
             ).all()
-            if due:
-                logger.info("Scheduled refresh started: user_id=%s due_sources=%s", user.id, [source.domain for source in due])
-                # Discovery runs only on a tick that refreshes, so it happens twice a day and not every half hour.
-                _run_refresh(user.id, profile, [*due, *_discover_companies(db, user.id, profile.country)])
+            due = sorted(
+                (source for source in eligible if source.last_refreshed_at is None or source.last_refreshed_at < cutoff),
+                key=lambda source: source.last_refreshed_at or datetime.min,
+            )
+            batch = due[: refresh_budget(len(eligible), max_age, tick)]
+            # Discovery trickles a few companies on every tick, so it never arrives as one burst.
+            found = _discover_companies(db, user.id, profile.country, tick)
+            if batch or found:
+                logger.info(
+                    "Scheduled refresh started: user_id=%s sources=%s due=%s new_feeds=%s",
+                    user.id, [source.domain for source in batch], len(due), [source.domain for source in found],
+                )
+                _run_refresh(user.id, profile, [*batch, *found])
     finally:
         db.close()
         _refresh_lock.release()
@@ -168,7 +185,7 @@ def refresh_any(db: Session, source: JobSource, country: str, city: str, terms: 
     return refresh_source(db, source, terms)
 
 
-def _discover_companies(db: Session, user_id: int, country: str) -> list[JobSource]:
+def _discover_companies(db: Session, user_id: int, country: str, tick: timedelta) -> list[JobSource]:
     try:
         seed_companies(db, user_id, country)
     except Exception:
@@ -182,7 +199,7 @@ def _discover_companies(db: Session, user_id: int, country: str) -> list[JobSour
         logger.exception("Company domain lookup failed: user_id=%s", user_id)
         db.rollback()
     try:
-        return discover_feeds(db, user_id, country)
+        return discover_feeds(db, user_id, country, tick)
     except Exception:
         logger.exception("Company discovery failed: user_id=%s", user_id)
         db.rollback()

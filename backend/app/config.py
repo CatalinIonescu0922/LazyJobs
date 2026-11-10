@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     source_request_delay: float = 1.0
     crawl_workers: int = 6
     refresh_interval_hours: int = 12
+    discovery_cover_days: int = 5
     source_cache_ttl_seconds: int = 300
     log_file: str = "backend/logs/app.log"
 

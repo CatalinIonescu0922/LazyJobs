@@ -267,15 +267,24 @@ they cover the API.
 ## Scheduled refresh (`scheduler.py`)
 
 While the app runs, a background task refreshes sources so jobs accumulate without clicking.
-`REFRESH_INTERVAL_HOURS` (default 12, so twice a day; 0 turns it off) is the only setting.
+`REFRESH_INTERVAL_HOURS` (default 12, so twice a day; 0 turns it off) is how often each source is
+refreshed, and `DISCOVERY_COVER_DAYS` (default 5) is how fast the company list is worked through,
+see Company discovery.
 
-- 60 seconds after startup and then every 30 minutes, `refresh_due_sources` picks the `active`
-  sources whose `last_refreshed_at` is empty or older than the interval, for every user with a
-  profile and a country, and refreshes them through the same worker pool as a manual refresh.
-  Using `last_refreshed_at` makes a restart harmless: sources refreshed an hour ago are
-  skipped, and after a long downtime everything due runs at once.
-- `failed` and `candidate` sources are skipped; a failed source is retried only by its Refresh
-  button.
+- 60 seconds after startup and then every 30 minutes (a tick), `refresh_due_sources` looks at the
+  sources that can be refreshed (`active`, or a `candidate` whose feed is already known) for every
+  user with a profile and a country. A source is due when `last_refreshed_at` is empty or older than
+  the interval. Using `last_refreshed_at` makes a restart harmless: sources refreshed an hour ago
+  are skipped.
+- Due sources are not all started together. A tick refreshes only the most overdue
+  `ceil(eligible sources x tick / interval)` of them (never refreshed first, then oldest). With a
+  12 hour interval and a 30 minute tick there are 24 ticks to an interval, so that is
+  `ceil(sources / 24)` a tick: 9 sources is 1 a tick, 24 is 1, 60 is 3, 300 is 13. Each source is
+  still refreshed about once an interval, but the load is spread over the day and stays spread,
+  instead of every source starting at the same minute and staying locked together. After a long
+  downtime the catch-up takes the same trickle, for example 9 sources over about 4 hours.
+- `failed` sources and `candidate` sources without a feed are skipped; a failed source is retried
+  only by its Refresh button.
 - It takes the same lock as a manual refresh without waiting, and skips the tick when a manual
   refresh is running.
 - Each run reads up to 100 new postings per JSON-LD board and 30 per model-tier board, so twice
@@ -297,23 +306,30 @@ the user's country and works out, one at a time, which of them have a feed it ma
   Legal suffixes are dropped so "Bosch Romania" and "BOSCH ROMANIA SRL" are one company, and
   `postings` is how many stored postings it has. Employer sources are skipped because their feed is
   already read; names under 4 characters and "Confidential" are skipped.
-- `discover_feeds` probes the companies with the most postings first, at most 20 per run. A
+- `discover_feeds` probes the companies with the most postings first, a few on every tick. A
   company is `unchecked`, `feed` (a source was created) or `none`. A `none` company is asked
   again only after 30 days; a `feed` company is never probed again.
+- How many a tick comes from the company count and `DISCOVERY_COVER_DAYS`:
+  `ceil(companies / (cover days x ticks a day))`. With 399 companies, 5 days and 48 ticks a day that
+  is `ceil(399 / 240)` = 2 companies every 30 minutes, which covers all of them in about 4 days. The
+  count is taken from all companies, not the unchecked ones, so the pace does not decay as the
+  backlog shrinks, and it grows by itself as companies are added (1,000 companies is 5 a tick). The
+  measured cost of a probe is 1.75 requests and about 1.65 s (20 companies took 33 s and about 35
+  requests), so a tick costs about 3.5 requests, roughly 170 requests a day to Greenhouse, against a
+  ceiling of one request a second.
 - A probe tries up to two Greenhouse slugs made from the name (the whole name without legal
   suffixes, and its first word if it has 4 letters or more) and accepts a board only if it has a
   posting in the country and its name agrees with the slug. That is the same check `find_feed`
   uses, and it is what rejects a different company with the same name. Greenhouse is the only
   provider probed: SmartRecruiters refuses us, a Workday tenant and site cannot be guessed
   from a name, and no real Lever or Workable board turned up in testing.
-- Probing is slow on purpose: one fetcher for the whole run, at least a second between
-  requests and a further second between companies, so a run is roughly 60 requests. A block
-  (429, 403) or a failed connection stops the run and leaves the remaining companies
-  `unchecked`; it never marks a company `none`.
+- Probing is slow on purpose: one fetcher for the whole tick, at least a second between requests
+  and a further second between companies. A block (429, 403) or a failed connection stops the
+  tick and leaves the remaining companies `unchecked`; it never marks a company `none`.
 - A found feed becomes an `employer` source with its provider and slug already set and is
-  refreshed in the same run.
-- It runs from the scheduled refresh, on a tick that refreshes sources, so twice a day and not
-  every half hour. A failure in discovery is logged and does not stop the refresh.
+  refreshed in the same tick.
+- Discovery runs on every tick, even when no source is due. A failure in it is logged and does not
+  stop the refresh.
 - The list is stored, not recomputed: `companies` is in Postgres, in the `lazyjobs_pgdata` volume,
   and survives `docker compose down` and a rebuild; only `down -v` removes it. Every probe answer
   is kept (`feed` or `none` with `checked_at`), seeding never resets a checked company, and rows
@@ -326,8 +342,9 @@ the user's country and works out, one at a time, which of them have a feed it ma
   the next try is a full interval later and a permanent refusal costs about two requests a day. A
   user who disables a source is respected: it is not refreshed and its company is not probed again.
 - Each company also gets a website domain, only so the Companies screen can show its logo.
-  The model proposes domains in batches of 40 (the best-known companies first, in the same scheduled
-  run, before the feed probe) and the code keeps one only if it plausibly belongs to the company: the
+  The model proposes domains in batches of up to 40 (the best-known companies first, on a tick,
+  before the feed probe) and only once at least 10 companies are waiting, so a few new names do not
+  cost a model call on every tick, and the code keeps one only if it plausibly belongs to the company: the
   domain's name must contain, or be contained in, the company name without legal suffixes and the
   country word, or start with its first word. A rejected or missing answer is stored as an empty
   string, which means "asked, unknown", while a null `domain` means nobody has asked yet, so a

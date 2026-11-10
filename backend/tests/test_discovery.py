@@ -107,11 +107,15 @@ def add_company(db, user_id: int, name: str, postings: int, status: str = "unche
     db.add(Company(user_id=user_id, key=name.lower(), name=name, postings=postings, status=status, checked_at=checked))
 
 
-def probe(db, user_id: int, finder):
+WHOLE_PERIOD = timedelta(days=5)
+
+
+def probe(db, user_id: int, finder, tick: timedelta = WHOLE_PERIOD):
+    # The default tick is the whole cover period, so every company is due in the one call.
     with patch.object(discovery, "find_feed_for_company", side_effect=finder) as find, patch.object(discovery.time, "sleep") as sleep, patch.object(
         discovery, "SafeFetcher"
     ):
-        created = discovery.discover_feeds(db, user_id, "RO")
+        created = discovery.discover_feeds(db, user_id, "RO", tick)
     return created, find, sleep
 
 
@@ -128,17 +132,51 @@ def test_a_found_feed_becomes_an_employer_source_and_the_company_is_marked(sessi
         assert found["no feed ltd"].status == "none" and found["no feed ltd"].checked_at is not None
 
 
-def test_the_best_known_companies_are_probed_first_and_only_twenty_per_run(session_factory):
+def test_a_tick_probes_its_share_best_known_first(session_factory):
     with session_factory() as db:
         user_id = make_user(db)
         for number in range(25):
             add_company(db, user_id, f"Company {number:02d}", number)
         db.commit()
         asked = []
-        _, find, sleep = probe(db, user_id, lambda name, country, fetcher: asked.append(name))
-        assert find.call_count == discovery.MAX_PROBES
-        assert asked[0] == "Company 24" and asked[-1] == "Company 05"
-        assert sleep.call_count == discovery.MAX_PROBES - 1
+        # 25 companies over 5 days of 12 hour ticks is 10 ticks, so ceil(25 / 10) = 3 a tick.
+        _, find, sleep = probe(db, user_id, lambda name, country, fetcher: asked.append(name), tick=timedelta(hours=12))
+        assert asked == ["Company 24", "Company 23", "Company 22"]
+        assert sleep.call_count == 2
+
+
+def test_every_company_is_probed_within_the_cover_period(session_factory):
+    with session_factory() as db:
+        user_id = make_user(db)
+        for number in range(45):
+            add_company(db, user_id, f"Company {number:02d}", number)
+        db.commit()
+        for _ in range(10):
+            probe(db, user_id, lambda name, country, fetcher: None, tick=timedelta(hours=12))
+        assert db.query(Company).filter(Company.status == "unchecked").count() == 0
+
+
+@pytest.mark.parametrize(
+    "total, tick, expected",
+    [
+        (399, timedelta(minutes=30), 2),
+        (240, timedelta(minutes=30), 1),
+        (241, timedelta(minutes=30), 2),
+        (1000, timedelta(minutes=30), 5),
+        (399, timedelta(hours=12), 40),
+        (0, timedelta(minutes=30), 1),
+        (1, timedelta(minutes=30), 1),
+    ],
+)
+def test_probes_per_tick_spreads_the_companies_over_the_cover_days(total, tick, expected):
+    assert discovery.probes_per_tick(total, tick) == expected
+
+
+def test_the_probes_of_one_cover_period_always_add_up_to_every_company():
+    tick = timedelta(minutes=30)
+    ticks_in_period = timedelta(days=5) / tick
+    for total in range(0, 5000, 37):
+        assert discovery.probes_per_tick(total, tick) * ticks_in_period >= total
 
 
 def test_checked_companies_are_not_probed_again_until_a_month_has_passed(session_factory):
@@ -186,8 +224,8 @@ def test_a_feed_that_already_has_a_source_does_not_get_a_second_one(session_fact
         assert keys(db, user_id)["emag"].status == "feed"
 
 
-def lookup(db, user_id: int, answers):
-    with patch.object(discovery, "propose_domains", side_effect=answers) as ask:
+def lookup(db, user_id: int, answers, minimum: int = 1):
+    with patch.object(discovery, "MIN_DOMAIN_BATCH", minimum), patch.object(discovery, "propose_domains", side_effect=answers) as ask:
         return discovery.enrich_domains(db, user_id, "RO"), ask
 
 
@@ -284,3 +322,17 @@ def test_domain_fits_the_company_name(name, domain, fits):
 )
 def test_the_domain_is_reduced_to_a_bare_host(raw, expected):
     assert discovery._clean_domain(raw) == expected
+
+
+def test_a_handful_of_new_companies_waits_for_a_worthwhile_batch_before_the_model_is_asked(session_factory):
+    with session_factory() as db:
+        user_id = make_user(db)
+        for number in range(discovery.MIN_DOMAIN_BATCH - 1):
+            add_company(db, user_id, f"Company {number:02d}", 1)
+        db.commit()
+        found, ask = lookup(db, user_id, lambda names, country: [], minimum=discovery.MIN_DOMAIN_BATCH)
+        assert found == 0
+        ask.assert_not_called()
+        add_company(db, user_id, "The Tenth One", 1)
+        db.commit()
+        lookup(db, user_id, lambda names, country: [], minimum=discovery.MIN_DOMAIN_BATCH)[1].assert_called_once()

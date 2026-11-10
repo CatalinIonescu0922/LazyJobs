@@ -101,12 +101,15 @@ def test_discovery_runs_on_a_refreshing_tick_and_its_new_sources_are_refreshed_t
     assert calls == [["due.example", "veeamsoftware.greenhouse.io"]]
 
 
-def test_discovery_does_not_run_when_nothing_is_due(session_factory):
+def test_discovery_still_trickles_on_a_tick_where_nothing_is_due(session_factory):
     user_id = add_user(session_factory, "a@example.com")
     add_source(session_factory, user_id, "fresh.example", refreshed_hours_ago=1)
-    with patch.object(jobs, "SessionLocal", session_factory), patch.object(jobs, "_discover_companies") as discover, patch.object(jobs, "_run_refresh"):
+    with patch.object(jobs, "SessionLocal", session_factory), patch.object(jobs, "_discover_companies", return_value=[]) as discover, patch.object(
+        jobs, "_run_refresh"
+    ) as run:
         jobs.refresh_due_sources(timedelta(hours=12))
-    discover.assert_not_called()
+    discover.assert_called_once()
+    run.assert_not_called()
 
 
 def test_a_discovery_failure_does_not_stop_the_refresh(session_factory):
@@ -158,8 +161,53 @@ def test_a_failed_domain_lookup_does_not_keep_feeds_from_being_found(session_fac
     user_id = add_user(session_factory, "a@example.com")
     with session_factory() as db:
         feed = JobSource(user_id=user_id, domain="found.greenhouse.io", kind="employer")
-        with patch.object(jobs, "seed_companies"), patch.object(jobs, "enrich_domains", side_effect=RuntimeError("vertex down")), patch.object(
+        with patch.object(jobs, "seed_companies"), patch.object(
+            jobs, "enrich_domains", side_effect=RuntimeError("vertex down")
+        ), patch.object(
             jobs, "discover_feeds", return_value=[feed]
         ) as discover:
-            assert jobs._discover_companies(db, user_id, "RO") == [feed]
+            assert jobs._discover_companies(db, user_id, "RO", timedelta(minutes=30)) == [feed]
     discover.assert_called_once()
+    assert discover.call_args.args[3] == timedelta(minutes=30)
+
+
+@pytest.mark.parametrize(
+    "sources, expected",
+    [(0, 1), (1, 1), (9, 1), (24, 1), (25, 2), (60, 3), (300, 13)],
+)
+def test_the_refresh_budget_spreads_sources_over_the_interval(sources, expected):
+    assert jobs.refresh_budget(sources, timedelta(hours=12), timedelta(minutes=30)) == expected
+
+
+def test_one_tick_refreshes_the_most_overdue_sources_first_and_only_its_share(session_factory):
+    user_id = add_user(session_factory, "a@example.com")
+    add_source(session_factory, user_id, "never.example")
+    add_source(session_factory, user_id, "oldest.example", refreshed_hours_ago=40)
+    add_source(session_factory, user_id, "older.example", refreshed_hours_ago=30)
+    add_source(session_factory, user_id, "recent.example", refreshed_hours_ago=20)
+    batches = []
+    record = lambda uid, profile, sources: batches.append([source.domain for source in sources])  # noqa: E731
+    with patch.object(jobs, "SessionLocal", session_factory), patch.object(jobs, "_discover_companies", return_value=[]), patch.object(
+        jobs, "_run_refresh", side_effect=record
+    ):
+        for _ in range(4):
+            jobs.refresh_due_sources(timedelta(hours=12), timedelta(minutes=30))
+            with session_factory() as db:
+                for source in db.scalars(select(JobSource)).all():
+                    if source.domain in {name for batch in batches for name in batch}:
+                        source.last_refreshed_at = utcnow()
+                db.commit()
+    # Four sources over 24 ticks is one a tick: never refreshed first, then oldest to newest, one by one.
+    assert batches == [["never.example"], ["oldest.example"], ["older.example"], ["recent.example"]]
+
+
+def test_a_larger_fleet_is_refreshed_in_slices(session_factory):
+    user_id = add_user(session_factory, "a@example.com")
+    for number in range(60):
+        add_source(session_factory, user_id, f"source-{number:02d}.example")
+    batches = []
+    with patch.object(jobs, "SessionLocal", session_factory), patch.object(jobs, "_discover_companies", return_value=[]), patch.object(
+        jobs, "_run_refresh", side_effect=lambda uid, profile, sources: batches.append(len(sources))
+    ):
+        jobs.refresh_due_sources(timedelta(hours=12), timedelta(minutes=30))
+    assert batches == [3]

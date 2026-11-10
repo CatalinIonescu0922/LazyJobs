@@ -1,11 +1,13 @@
+import math
 import re
 import time
 from collections import Counter
 from datetime import timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..llm import propose_domains
 from ..logging import logger
 from ..models import Company, Job, JobSource, utcnow
@@ -13,8 +15,8 @@ from ..textnorm import normalise
 from .ats import _domain_label, find_feed_for_company, source_domain
 from .fetch import FetchError, SafeFetcher
 
-MAX_PROBES = 20
 MAX_DOMAIN_LOOKUPS = 40
+MIN_DOMAIN_BATCH = 10
 RECHECK_AFTER = timedelta(days=30)
 PAUSE_SECONDS = 1
 GREENHOUSE_API = "boards-api.greenhouse.io"
@@ -46,8 +48,16 @@ def seed_companies(db: Session, user_id: int, country: str) -> int:
     return created
 
 
-def discover_feeds(db: Session, user_id: int, country: str) -> list[JobSource]:
+def probes_per_tick(total: int, tick: timedelta) -> int:
+    # Spread the companies evenly over DISCOVERY_COVER_DAYS: with 399 companies, 5 days and a tick every
+    # 30 minutes that is ceil(399 / 240) = 2 companies a tick, about 3.5 requests, and never a burst.
+    ticks = timedelta(days=settings.discovery_cover_days) / tick
+    return max(1, math.ceil(total / ticks))
+
+
+def discover_feeds(db: Session, user_id: int, country: str, tick: timedelta) -> list[JobSource]:
     # The best-known companies go first. One that has no feed is asked again only after a month.
+    total = db.scalar(select(func.count()).select_from(Company).where(Company.user_id == user_id)) or 0
     due = db.scalars(
         select(Company)
         .where(
@@ -55,7 +65,7 @@ def discover_feeds(db: Session, user_id: int, country: str) -> list[JobSource]:
             or_(Company.status == "unchecked", and_(Company.status == "none", Company.checked_at < utcnow() - RECHECK_AFTER)),
         )
         .order_by(Company.postings.desc(), Company.id)
-        .limit(MAX_PROBES)
+        .limit(probes_per_tick(total, tick))
     ).all()
     fetcher = SafeFetcher(GREENHOUSE_API)
     created: list[JobSource] = []
@@ -92,7 +102,11 @@ def discover_feeds(db: Session, user_id: int, country: str) -> list[JobSource]:
 
 def enrich_domains(db: Session, user_id: int, country: str) -> int:
     # Only for the logo on the Companies screen. The model proposes a domain and the code keeps it only
-    # when it plausibly belongs to the company, so a made-up one is stored as unknown.
+    # when it plausibly belongs to the company, so a made-up one is stored as unknown. It waits for a
+    # worthwhile batch, so a handful of new names does not cost a model call on every tick.
+    pending = db.scalar(select(func.count()).select_from(Company).where(Company.user_id == user_id, Company.domain.is_(None))) or 0
+    if pending < MIN_DOMAIN_BATCH:
+        return 0
     todo = db.scalars(
         select(Company).where(Company.user_id == user_id, Company.domain.is_(None)).order_by(Company.postings.desc(), Company.id).limit(MAX_DOMAIN_LOOKUPS)
     ).all()

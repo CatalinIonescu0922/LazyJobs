@@ -14,7 +14,7 @@ async def run() -> None:
     await asyncio.sleep(STARTUP_DELAY_SECONDS)
     while True:
         try:
-            await asyncio.to_thread(refresh_due_sources, timedelta(hours=settings.refresh_interval_hours))
+            await asyncio.to_thread(refresh_due_sources, timedelta(hours=settings.refresh_interval_hours), timedelta(seconds=CHECK_SECONDS))
         except Exception:
             logger.exception("Scheduled refresh failed")
         await asyncio.sleep(CHECK_SECONDS)

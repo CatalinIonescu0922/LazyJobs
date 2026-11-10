@@ -69,11 +69,11 @@ corporate proxy dropped or rate-limited most job-site connections. Compose there
 blanks the proxy variables for the app. A machine with no direct internet access has to
 undo that, as the comment in `docker-compose.yml` explains.
 
-While the app runs it refreshes its active sources every `REFRESH_INTERVAL_HOURS` (default 12,
-0 disables; see `docs/sources.md`). The first run starts a minute after startup, and it
-crawls every source that is more than that old, so expect traffic and model calls after a
-restart that follows a long pause. Each of those runs also probes up to 20 unchecked companies against
-Greenhouse to find employer feeds.
+While the app runs it refreshes its active sources about every `REFRESH_INTERVAL_HOURS` (default 12,
+0 disables; see `docs/sources.md`). A tick every 30 minutes starts only a share of the sources that
+are due, so the load is spread over the day, and it probes a couple of companies against Greenhouse
+to find employer feeds, so the whole company list is covered in `DISCOVERY_COVER_DAYS` (default 5).
+After a long pause expect some traffic and model calls for a few hours while it catches up.
 
 Backend tests run in the app image, from a directory other than `backend/` so the
 Settings class does not read `backend/.env`:
