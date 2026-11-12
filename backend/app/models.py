@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint , ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -115,7 +115,7 @@ class JobSource(Base):
     last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     posting_count: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
+    dead_posting: Mapped[list[str]] = mapped_column(ARRAY(String) , default=list , nullable=False)
     user: Mapped[User] = relationship()
 
 
