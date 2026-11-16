@@ -1,8 +1,7 @@
 # Frontend
 
-The browser UI: a Vite, React and TypeScript app in `frontend/`. Phase 6 built the shell
-only: sign-in, a protected Home page, and the router and API wrapper that later pages
-plug into.
+The browser UI: a Vite, React and TypeScript app in `frontend/`. The shell came first:
+sign-in, a protected Home page, and the router and API wrapper that later pages plug into.
 
 ## Where it lives
 
@@ -94,7 +93,7 @@ into a browser session, so the button must be a navigation.
 
 Vite proxies `/api` to `http://localhost:8000`, so the browser sees one origin
 (`localhost:5173`) and the cookies are same-origin. Nothing in the frontend hard-codes
-the backend address. Production serving (phase 16) will put the built files behind the
+the backend address. Production serving (phase 7) will put the built files behind the
 backend instead, and the relative `/api` paths keep working unchanged.
 
 The Google redirect URI is `http://localhost:8000/...`, which the browser visits

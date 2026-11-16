@@ -13,10 +13,16 @@ when the context changes the decision can be retired deliberately instead of dis
 an outage. Entry 20 is the one decision here that has already expired.
 
 Phase numbers in entries 1 to 26 refer to the twenty-one-phase numbering that existed
-before 2026-10-27. Entries 27 onward use the twenty phases now in [BUILD.md](BUILD.md).
-Phases 1 to 5 and 12 to 15 kept their numbers. The rest map old to new as: 6 to 7,
-7 and 8 to 8 and 9, 9 to 10, 10 and 11 to 11, 16 to 6 and 16, 17 to 7, 18 to 10, 19 to 11,
-20 to 17, 21 to 18.
+before 2026-10-27. Entries 27 to 35 use the twenty phases that [BUILD.md](BUILD.md) had
+until 2026-11-16. Phases 1 to 5 and 12 to 15 kept their numbers. The rest map old to new
+as: 6 to 7, 7 and 8 to 8 and 9, 9 to 10, 10 and 11 to 11, 16 to 6 and 16, 17 to 7, 18 to
+10, 19 to 11, 20 to 17, 21 to 18.
+
+BUILD.md was renumbered again on 2026-11-16, from twenty phases to thirteen, when the plan
+was rewritten around a global catalog. Entries 36 onward use the thirteen. Twenty-phase
+numbers map to the new ones as: 12 to 2, 10 to 5, 11 to 6, 13 and 16 to 7, 14 to 8, 15 to
+9, 18 to 10, 17 to 13, 19 and 20 to 12. Phases 1 to 9 of the twenty are built and have no
+phase of their own now.
 
 ---
 
@@ -755,6 +761,10 @@ shows the cold start on the first call and its absence on the second.
 
 ## 17. Run the nightly refresh as a Cloud Run job, not an HTTP route
 
+**Superseded by**: entry 38, in part. The job is now `cv-applier-gather`, runs what is due
+every two hours rather than once a night, and shares a lease with a laptop gatherer. The
+reasons for a job over a route stand.
+
 **Phase**: 14, scheduled refresh. Not built yet.
 
 **The problem**: Sources have to be refreshed nightly. The app is already an HTTP service,
@@ -1294,6 +1304,11 @@ command prints nothing, which is the board that needs the model.
 
 ## 28. Let the model propose job boards, and let code verify every one
 
+**Superseded by**: entry 36, in part. The country now comes from the markets the gatherer
+covers (`GATHER_COUNTRIES`), not from a profile. The rule that the model proposes and the
+code verifies stands, and the expiry condition below, that the app becomes hosted and
+multi-user, is the one that has now fired.
+
 **Phase**: 8, job sources. Design only; not built yet.
 
 **The problem**: Reading boards generically still leaves the question of which boards to
@@ -1684,6 +1699,229 @@ than this UI consumes the API. Then the API contract comes first and the screens
 **See it yourself**: not runnable yet. After phase 6, `npm run dev` and
 `http://localhost:5173` show the sign-in page, and `ls frontend/src/pages` gains one file
 per phase from there.
+
+---
+
+## 36. Gather one global catalog with no user in the loop
+
+**Phase**: 3 and 4, the global catalog and the gatherer. Design only; not built yet.
+
+**The problem**: The app crawled on behalf of a user. `job_sources` and `companies`
+carried a `user_id`, the crawl was steered by that user's profile, and a new user's first
+CV upload ran board discovery and a crawl inside one request before the page moved on.
+Measured on 2026-11-16 with two users: 49 source rows for 30 distinct sources, 1,192
+company rows for 631 names, one board `failed` for one user and `active` for the other, and
+a store that follows two CVs, 7% of it sales roles. The people this is for will not wait for
+a crawl, and a sales CV finds little that was fetched for a DevOps one.
+
+**What we did**: Moved ownership. Sources, companies, dead URLs and jobs belong to the
+catalog. A user owns a profile, favorites and what was generated for them. One program, the
+gatherer, writes postings. Its inputs are the database and the markets in
+`GATHER_COUNTRIES`, never a profile, so a category board is read in every category and an
+aggregator is searched by a fixed list of job families. The API only reads the catalog; an
+admin's Refresh button sets a flag the gatherer sees. Sources are managed by the emails in
+`ADMIN_EMAILS`, because one user's click now changes everybody's data and a user-typed
+domain is a way to aim the server's crawler.
+
+**Why not the obvious alternative**: Keeping the per-user crawl and letting users share the
+`jobs` table, which entry 6 already did, fixes the storage and none of the rest. Every user
+still pays for a crawl before seeing anything, still gets what one profile asked for, and
+the first user's CV decides what the second can find. Starting a crawl in the background
+when someone signs up hides the wait for one person and leaves a new user with an empty
+list for the first hours, which is the case this change exists for.
+
+**The concept**: Separate the writer from the readers. A cache of public data fills from a
+producer that knows nothing about its consumers, and consumers filter it. The other way
+round, the producer shaped by a consumer, makes every consumer pay for the producer's
+latency and makes the data only as broad as the first consumer. It is the split between a
+search engine's crawler and its query path, or a warehouse's load job and its dashboards:
+writes are batch, scheduled and throttled by the politeness the sources deserve; reads are
+interactive, indexed and cheap. It also moves the unit of work from per user to per source,
+so adding a user costs a query and not a crawl.
+
+**Expires when**: a source can only be read with a user's own login (none here is), the
+terms of a source forbid serving its postings to anyone but the person who asked, or the
+market list grows until one gatherer cannot cover it in a day. The second is a live risk,
+and the sourcing question that entry 28 left open: see PLAN.md section 10.
+
+**See it yourself**: `docker compose exec -T db psql -U cv -d cv_applier -c "select kind,
+domain, array_agg(user_id || ':' || status) from job_sources group by 1,2 having count(*) >
+1"` prints the duplicated sources and, for HiPo, two different statuses. After phase 3 it
+prints no rows.
+
+---
+
+## 37. Move the data to Cloud SQL first, and treat the end of the trial as part of persistence
+
+**Phase**: 2, persist in GCP. Design only; not built yet.
+
+**The problem**: Everything the app had gathered, two users' profiles, 1,730 jobs and weeks
+of crawl state, lived in a Docker volume on one laptop, behind a plan that put Cloud SQL
+after three feature phases. An earlier revision had already pulled it forward so two
+laptops could share it. Two things changed the argument: the catalog is now the product,
+and the free trial that pays for the cloud ends by 2026-12-23, about five weeks away.
+
+**What we did**: Phase 2 comes right after the half-hour fix that makes the schema
+consistent, and before any feature. Cloud SQL `db-f1-micro` with daily backups, the uploads
+bucket and three secret containers are in Terraform; the user and the secret values are
+set by hand. Alembic builds the schema through the proxy and a data-only `pg_dump` fills
+it, and the counts are compared. A restore is proved into a scratch database, not assumed.
+Upgrading the billing account is a step of the phase and not a later chore, because a
+database in a project whose trial has ended stops with it. The tier is a starting point
+with a stated rule for changing it: feed latency and the connection limit are measured, and
+the fix is one line of Terraform.
+
+**Why not the obvious alternative**: Finishing matching and favorites first is the order a
+feature-minded plan takes, and it keeps the cloud bill at zero a little longer. It also
+builds on a database nobody can afford to lose and nobody has backed up, and every week of
+gathering done before the move is a week that has to be copied. Dumping to a bucket is
+cheaper than a managed instance, and it gives neither a second laptop nor a Cloud Run job a
+shared database to write to.
+
+**The concept**: Durability has three parts that fail separately: the medium (a disk, a
+replica, a backup), the process (state held in memory is not durable) and the account that
+pays for it (a resource is as persistent as its billing). People plan for the first, design
+for the second and forget the third, and a free trial turns the third into a date. A backup
+you have never restored is a hope, so the plan restores one. A daily backup answers two
+questions, how much can be lost and how long recovery takes: up to a day of changes, and
+the time a restore takes. That is acceptable for a catalog that can be gathered again and
+is the reason user data is dumped before anything risky.
+
+**Expires when**: losing a day of data or an hour of service would really matter, which is
+when point-in-time recovery and a replica are worth their cost, or the catalog is large
+enough that restoring it is slower than gathering it again.
+
+**See it yourself**: today `gcloud sql instances list --project=cv-applier-ionescu-catalin`
+prints `Listed 0 items.` After phase 2 it lists `cv-applier-db`, and `gcloud sql backups
+list --instance=cv-applier-db` lists a backup.
+
+---
+
+## 38. Gather where compute is free, and serve from where uptime is cheap
+
+**Phase**: 4 and 8, the gatherer and the refresh in the cloud. Design only; not built yet.
+
+**The problem**: A crawler that obeys one request a second per host spends nearly all its
+wall-clock time waiting. A Cloud Run job bills for every second it runs, whether the CPU is
+busy or not. The gather period asks for hours of crawling a day for a few days; the steady
+state needs perhaps half an hour a day.
+
+**What we did**: One program, three ways to run it. During the gather period it loops on a
+laptop and writes to Cloud SQL through the proxy. In the steady state a Cloud Run job runs
+it once and exits, triggered every two hours and doing only what is due. A PostgreSQL
+advisory lock makes the gatherer a singleton across laptops and the job. The API never
+fetches a job page; its Refresh button sets a flag. The cloud job's first run is compared
+with the laptop's, because Cloud Run's addresses belong to a datacenter and some boards
+refuse those.
+
+**Why not the obvious alternative**: Doing the gather period on Cloud Run keeps everything
+in one place and does not need the laptop on. Around the clock it would cost tens of
+dollars a month for a crawler that is idle most of the time, several times the cost of the
+database. Running the loop inside the API service, as it does today, needs an instance that
+is always warm, which is the standing charge `--min-instances=0` exists to avoid, and a
+crawl and a user then compete for one process.
+
+**The concept**: Cloud billing meters allocated time, not useful work, so the cheapest
+place for a workload that waits is wherever the waiting is free. The sound design splits a
+program by its duty cycle: a bursty interactive path on scale-to-zero infrastructure and a
+long throttled batch path wherever the hours cost least. A lease is the usual way to make a
+batch worker a singleton without a coordinator: whoever holds the lock works, and a worker
+that dies releases it because the lock lives on its database session. Keeping all state in
+the database, so a run can stop anywhere and be repeated, is what lets the work move
+between machines.
+
+**Expires when**: the gather period is over and the laptop is no longer needed, which is
+the plan, or the datacenter comparison shows boards that block Cloud Run's addresses, in
+which case the steady state stays on a machine that is not in one.
+
+**See it yourself**: not runnable yet. After phase 4, while the loop is mid-run,
+`docker compose run --rm gatherer python -m app.gather` prints that the lease is held and
+exits.
+
+---
+
+## 39. Call the model for a user only on a click, and bound every click
+
+**Phase**: 6, favorites and the CV and the letter. Design only; not built yet.
+
+**The problem**: The two things a favorite unlocks, a CV rewritten for the job and a cover
+letter, are the only places a user's activity spends money and capacity. If a star could
+start them, cost would scale with the number of users, the size of the catalog and the
+speed of a fingertip, none of which tracks anyone's intent.
+
+**What we did**: A star only records a favorite. Each of the two buttons makes one model
+call per click. Each call has a cache (the result is stored on the application, reopening
+it is free, and regenerating is a second click after a 60-second cooldown), an in-flight
+marker on the application row so two clicks cannot run two calls, a daily cap per user
+counted from an append-only `llm_usage` table (CV extraction on upload counts too),
+truncated inputs, a capped output and a per-process limit on concurrent calls. Tests assert
+that favoriting, listing and dismissing never call the model. The prompts forbid invented
+facts and put what the CV lacks in a separate `gaps` list.
+
+**Why not the obvious alternative**: Generating a letter when a job is favorited feels
+faster and saves a click. It turns a gesture into a paid call, regenerates for jobs the user
+never opens, and gives a page that lists favorites a hidden cost. Precomputing for each
+user's best matches is worse: it spends on every user's top results all the time, before
+anyone asked.
+
+**The concept**: Make cost proportional to intent. Anything triggered by a read, a page load
+or a background job scales with the volume of data; anything triggered by a deliberate action
+scales with how much the user wants it. Around that action the application needs the
+controls an API would put at a gateway: idempotence (the cache), mutual exclusion (the
+in-flight marker, kept in a column and not in a lock held across the call, because a
+connection held for seconds is scarce on a small database), a quota (the daily cap) and
+bounded concurrency. The model's output is untrusted, like the posting it read, so it is
+parsed into fixed fields.
+
+**Expires when**: a feature is wanted that needs the model to act without a click, such as
+alerts on new matches. That would be designed against a budget and not triggered by a read.
+
+**See it yourself**: not runnable yet. After phase 6, star five jobs and `select count(*)
+from llm_usage` has not moved; click Create cover letter and it is one higher.
+
+---
+
+## 40. Test on the engine you run, and make a schema mismatch fail loudly
+
+**Phase**: 1, 3 and 4. Design only; not built yet.
+
+**The problem**: On 2026-11-16 two failures turned out to have one cause. The scheduled
+refresh had failed every 30 minutes for four days with `column job_sources.dead_postings
+does not exist`, in a log file nobody was reading, and 78 of 424 tests errored because they
+build the schema on in-memory SQLite, which cannot render the new `ARRAY` column. A model
+had gained a column, the migration for it was never applied, and the process that was
+running had loaded an earlier edit of the model. Entry 10 already said why a different
+engine in development is a mistake; the test suite was the one place that still used one.
+
+**What we did**: Phase 1 removes the unapplied change, whose migration would have failed
+anyway (a NOT NULL column with no default on a table that has rows), and restarts the
+process. Phase 3 builds the test schema on PostgreSQL, in a throwaway database on the
+isolated Compose `db`, and adds one test that runs `alembic upgrade head` on an empty
+database and then `alembic check`, so a model and its migrations cannot drift apart
+unseen. Phase 4 makes the API and the gatherer compare the database's revision with the
+code's head at start and exit naming both. The same phase makes a stale catalog visible:
+`GET /api/catalog` reports `stale`, the feed shows a banner, and in the cloud an alert
+fires when the refresh job has not succeeded for a day.
+
+**Why not the obvious alternative**: Keeping SQLite for speed and changing the column to
+JSON would have made the suite pass and hidden the same class of problem, and it cannot
+test advisory locks or the text search the feed needs. Restarting the container would have
+crashed it. Neither would have made the next silent failure visible.
+
+**The concept**: Background work fails silently by default. No user is waiting for it, so
+nobody sees the error, and the only signal is that something stopped changing. Treat the
+absence of change as the thing to monitor, with a heartbeat or a freshness figure in the
+product, and make a process refuse to start against a schema it does not match, since a
+crash at deploy is cheaper than an error at every tick. The test database has to be the
+production engine for the reason a staging environment has to resemble production: a
+difference is where the bug that only appears in production lives.
+
+**Expires when**: production moves off PostgreSQL, at which point the test engine moves with
+it. The start-up check and the freshness signal do not go stale.
+
+**See it yourself**: `docker compose exec app alembic current` and `docker compose exec app
+alembic heads` print different revisions today, and `rg -a "Scheduled refresh failed"
+backend/logs/app.log | tail -n 1` shows the failure still going.
 
 ---
 

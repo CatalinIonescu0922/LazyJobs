@@ -1,73 +1,69 @@
 # CV Applier - Build Progress
 
-Live status for the phases defined in [BUILD.md](BUILD.md). This is the first file to
-check to see exactly where the build stands; details of what each phase involves live in
-BUILD.md, the reasoning behind the design lives in [PLAN.md](PLAN.md), and the reasoning
-behind each individual decision lives in [LEARNING.md](LEARNING.md).
+Live status for the phases defined in [BUILD.md](BUILD.md). This is the first file to check
+to see exactly where the build stands. The design is in [PLAN.md](PLAN.md) and the reasons
+behind each decision are in [LEARNING.md](LEARNING.md).
 
 Status values: `not started`, `in progress`, `blocked`, `done`.
 
-## Part 1 - Backend and frontend, running locally
+The phases were renumbered on 2026-11-16, when the plan was rewritten. The notes below say
+which old phase each one continues ("old 8"); the log keeps the numbers that were current
+on the day each entry was written.
+
+## Current position
+
+The scheduled refresh has not succeeded since 2026-11-12 08:54, and 78 of 424 tests error,
+both from one unapplied migration (PLAN.md section 2). Phase 1 fixes both and is the next
+action. Nothing is deployed, and all the data exists on one laptop.
+
+## Foundation (built before the replan)
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Application skeleton, identity model, Google sign-in (old 1 to 3) | done | two Google accounts have signed in live (2026-11-08 and 2026-11-11); sign-out has not been observed |
+| GCP project and guardrails (old 4) | done | project, Terraform state bucket, $50 budget, runtime service account; no Cloud SQL, no bucket for uploads, no Cloud Run |
+| Local stack: Compose, PostgreSQL 16, Alembic (old 5) | done | the storage emulator keeps files in memory only |
+| Frontend shell and screens (old 6) | done | Sign-in, Home, Profile, Sources, Companies |
+| CV upload and profile (old 7) | done | |
+| Generic crawler and the model tier (old 8 and 9) | done, with gaps | dead URLs only in memory; sources are per user; the crawl follows a profile |
+| Employers and the ATS directory (old 20, in part) | done, with gaps | Greenhouse and Workday readers, `companies`, directory matching, trickle probing, Companies screen. Not built: Workable, Recruitee and Ashby readers, region-wide remote, apply-link harvesting (phase 12) |
+
+## Phases
 
 | Phase | What | Status | Notes |
 | --- | --- | --- | --- |
-| 1 | Application skeleton | done | verified: health 200, /docs 200, CORS preflight correct, 4 tables created |
-| 2 | Data model for identity | done | verified: identities unique on (provider, subject); users has no password_hash |
-| 3 | Google sign-in | done | verified: /me 401, unknown provider 404, unconfigured google 503, callback rejects missing state, second identity reuses the same user. Live Google round-trip needs GOOGLE_CLIENT_ID in .env |
-| 4 | GCP project and guardrails | done | verified: both states in the tfstate bucket, bootstrap plan clean, 11 resources in main, Vertex call returned "Ready". Region europe-west3 |
-| 5 | Local cloud-parity stack | done | Docker Compose, Postgres 16, fake-gcs-server, Alembic. SQLite and create_all removed |
-| 6 | Frontend shell and sign-in | in progress | built; sign-in redirect, proxy and protected route checked. The live Google login and sign-out still to run in a browser |
-| 7 | CV upload and profile | done | PDF/DOCX upload, Cloud Storage emulator, Vertex AI extraction, editable Profile screen, adds `profiles.country`, `city` and `salary_currency` |
-| 8 | Job sources and the generic crawler | done | board discovery, safe sitemap crawler, JSON-LD extraction, Sources screen, adds `job_sources`, fingerprints and salary; focused tests pass |
-| 9 | LLM extraction tier and coverage check | in progress | LLM tier built and run live (BestJobs and MyJob.ro read on it), coverage table recorded in BUILD.md. Not built: the Sources screen columns for added, skipped and failed per run |
-| 10 | Matching and the Matches screen | not started | duplicate grouping including same-company description overlap, boolean keyword query, hidden companies, salary and seniority; adds `profiles.hidden_companies` and `keyword_query` |
-| 11 | Applications, cover letters and the Tracker | not started | Vertex AI |
+| 1 | Back to green | not started | remove the unapplied `dead_posting` change, page caps as settings, restart; 30 minutes. Do this first |
+| 2 | Persist in GCP | not started | Cloud SQL, uploads bucket, secrets, `pg_dump` migration, proxy in Compose, a backup restored, billing upgrade decided. Continues old 12 |
+| 3 | One global catalog | not started | sources and companies lose `user_id`, no profile input to the crawl, admin-only sources, tests on PostgreSQL |
+| 4 | The gatherer | not started | `python -m app.gather`, lease, resume, draining, coverage report, staleness; the gather period starts |
+| 5 | The feed | not started | SQL narrowing, deterministic score and reason, boolean query, hidden companies. Continues old 10 |
+| 6 | Favorites and on-click CV and letter | not started | the star, `applications`, guard rails, the Saved screen. Continues old 11 |
+| 7 | Deploy the API and UI | not started | Cloud Run, Artifact Registry, the UI served from the image, privacy note, delete account. Continues old 13 and 16 |
+| 8 | The refresh in the cloud | not started | Cloud Run job and Scheduler, datacenter-address comparison, staleness alert. Continues old 14 |
+| 9 | Deploy on push | not started | Cloud Build trigger on main. Continues old 15 |
+| 10 | Observability, cost, teardown | not started | continues old 18 |
+| 11 | Retire gone jobs | not started (later) | needs the `last_seen_at` that phase 3 starts writing |
+| 12 | Wider reach | not started (later) | more ATS readers, region-wide remote, apply-link harvesting, a second market, rendering. Continues old 19 and 20 |
+| 13 | Polish | not started (later) | continues old 17 |
 
-## Part 2 - Running on GCP
-
-| Phase | What | Status | Notes |
-| --- | --- | --- | --- |
-| 12 | Data plane | not started | Cloud SQL, bucket, secrets. The billing clock starts here, about $10 a month |
-| 13 | First deploy | not started | Artifact Registry, Cloud Run, live Google sign-in |
-| 14 | Scheduled refresh | not started | Cloud Run job plus Cloud Scheduler |
-| 15 | Deploy on push | not started | Cloud Build trigger on main |
-
-## Part 3 - Shipping the frontend
-
-| Phase | What | Status | Notes |
-| --- | --- | --- | --- |
-| 16 | Serve the UI from the image | not started | multi-stage Dockerfile, backend serves the build |
-| 17 | Polish | not started | |
-
-## Part 4 - Operating it
-
-| Phase | What | Status | Notes |
-| --- | --- | --- | --- |
-| 18 | Observability and cost hygiene | not started | structured logs, credit burn-down, teardown checklist |
-
-## Part 5 - Extending reach
-
-Block nothing; do them after the phase 9 coverage table says which is worth doing.
-
-| Phase | What | Status | Notes |
-| --- | --- | --- | --- |
-| 19 | Browser rendering for JavaScript-heavy boards | not started | Playwright; skip if the coverage table shows no such board. Decide where Chromium runs from measured size |
-| 20 | Employers and their ATS feeds | in progress | built: Greenhouse and Workday readers, SmartRecruiters reader (blocked by that host's robots.txt), feed discovery by link and by slug guess, pasted ATS URL. Not built: Lever, Ashby, Workable, Recruitee, the apply-link route, agency labelling. See docs/sources.md |
-
-## Cloud spend
-
-Nothing is billed yet. No GCP project exists. Record the real figure here once phase 12
-creates the first chargeable resource, so the estimate in PLAN.md section 4 can be checked
-against what actually happened.
+## Cloud spend and the credit clock
 
 | | |
 | --- | --- |
-| Billing account created | not yet |
-| Credit expires | 90 days after that date |
-| Spent so far | $0 |
-| Predicted steady state | about $12 a month |
+| Project | `cv-applier-ionescu-catalin`, created 2026-09-22 |
+| Billing account | "My Billing Account", open |
+| Free trial started | no later than 2026-09-24 (the state bucket, which needs billing, was created that day). Read the exact date in Billing, Credits and write it here: ___ |
+| Free trial ends | no later than 2026-12-23 if it is the usual 90 days. Exact date: ___ |
+| Billing upgraded to paid | not yet. Do it before the trial ends (phase 2) |
+| Spent so far | not read: the billing API answered with a quota error on 2026-11-16. Nothing always-on exists, only the state bucket and Vertex AI calls. Check Billing, Reports |
+| Predicted steady state | about $12 to $15 a month (PLAN.md section 8) |
+
+Record the real monthly figure here once phase 2 has run for a month, so the estimate in
+PLAN.md can be checked against what happened.
 
 ## Log
+
+Entries up to 2026-11-10 use the phase numbers of the plan that was current then.
 
 - 2026-09-15: Phase 1 done. Note: config.py, db.py, models.py and requirements.txt from
   the pre-plan scaffolding had gone missing from disk; recreated them as documented in
@@ -173,6 +169,32 @@ against what actually happened.
   crawler with a Cloudflare challenge. Survey of 50 Romanian employers across Greenhouse,
   Lever, Workable and Recruitee found no Romanian posting. An in-process scheduler now
   refreshes active sources twice a day (phase 14's Cloud Run job is still not started).
+- 2026-11-10: Company discovery and persistence added. `companies` seeds employers seen
+  hiring on active boards and aggregators (399 companies), looks up domains via Vertex AI
+  with a plausibility check for logos, imports the ~12,000-board public ATS directory into
+  `ats_boards` (`directory.py`), matches companies by whole name (35 matched: 12 Ashby, 9
+  Greenhouse, 6 Workable, 5 Recruitee, 1 Workday, 1 Personio, 1 Rippling), and probes a few
+  on every 30-minute tick (`DISCOVERY_COVER_DAYS=5`), finding Veeam and eMAG on Greenhouse.
+  Added `GET /api/companies` and the `/companies` screen. Tests now fail on any network
+  access (`conftest.py`). Updated `PLAN.md` and `BUILD.md` to pull Phase 12 (Cloud SQL +
+  GCS bucket via `cloud-sql-proxy` in Docker Compose, plus `pg_dump` migration of local
+  data) ahead of Phases 10 and 11 so two laptops share one cloud database and bucket.
+
+- 2026-11-16: Plan rewritten around a global catalog that is gathered without any user and
+  kept in Cloud SQL, a per-user feed over it, and CV advice and cover letters for favorites
+  that run only on a click. Thirteen phases replace the old twenty; old 1 to 9 became the
+  foundation and the rest were renumbered (the mapping is in the tables above and in the
+  header of LEARNING.md). The state was measured first, because the notes had drifted: the
+  local database holds 1,730 jobs, 49 source rows for 30 distinct sources and 1,192 company
+  rows for 631 names, for two users. The scheduled refresh has failed on every tick since
+  2026-11-12, because the model has a `dead_posting` column whose migration was never
+  applied and the running process loaded an earlier name for it, so nothing has refreshed
+  for four days. A restart would crash the app, since the migration adds a NOT NULL column
+  to a populated table. 78 of 424 tests error because they build the schema on SQLite,
+  which cannot render the new ARRAY column. GCP has the project, the state bucket and the
+  budget, but no Cloud SQL, no uploads bucket and no Cloud Run, and the free trial ends by
+  2026-12-23. Nothing in the code or the running stack was changed. Decisions in
+  LEARNING.md entries 36 to 40.
 
 ---
 
@@ -180,6 +202,6 @@ against what actually happened.
 
 Updated at the end of every phase, in the same change as the phase's code: flip its
 status, add one line to the log with the date and a short note, and record any decision
-the phase produced (for example, the coverage table from phase 9, or the first
-real monthly bill from phase 12). Work stops for a quick check-in between phases rather
-than running through all twenty in one pass.
+the phase produced (for example, the coverage table from phase 4, or the first
+real monthly bill from phase 2). Work stops for a quick check-in between phases rather
+than running through the whole plan in one pass.

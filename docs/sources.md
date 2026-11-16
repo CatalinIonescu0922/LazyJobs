@@ -116,7 +116,7 @@ The reason is shown in the Sources screen. What each one means:
 | `set a job title and a country in your profile` | An aggregator source searches by the profile's first two titles and its country, and one of them is empty. |
 | `last refresh failed: X` | An aggregator or an ATS-backed employer source hit an error (a 429, say). It keeps its status so the next scheduled run, an interval later, tries again. An aggregator's very first failure marks it failed instead. |
 | `careers site uses X, which is not supported yet` | The careers page links to an ATS that has no reader here. |
-| `needs browser rendering` | The page is a script shell (phase 19). |
+| `needs browser rendering` | The page is a script shell (phase 12). |
 | `no JobPosting data found` | An employer page with no JSON-LD and no recognisable ATS. |
 
 ## The model tier (`llm_extract.py`)
@@ -292,7 +292,7 @@ see Company discovery.
   and MyJob.ro together. Politeness is unchanged: one request a second per host.
 - On Cloud Run the app scales to zero and a loop inside it cannot be relied on. Set
   `REFRESH_INTERVAL_HOURS=0` there and call `refresh_due_sources` from the scheduled job
-  (phase 14).
+  (phase 8; phase 4 replaces this loop with a separate gatherer process, see PLAN.md).
 
 ## Company discovery (`discovery.py`, `Company`)
 

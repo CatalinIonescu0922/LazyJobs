@@ -1,7 +1,15 @@
 # CV Applier
 
-A personal job-search assistant: parse a CV, match Romanian openings, draft cover
-letters, and track applications.
+A job-search assistant: gather job openings into one shared catalog, show each signed-in
+user the part of it that fits their CV, and, for the jobs they favorite, tailor their CV
+and draft a cover letter when they ask.
+
+Direction: the code still crawls per user, with sources and companies owned by a user, and
+a profile steers what is fetched. The plan is one global catalog gathered by a separate
+process with no user involved, stored in Cloud SQL, with each user seeing a filtered view
+of it. [PLAN.md](PLAN.md) is the target, [BUILD.md](BUILD.md) the steps and
+[PROGRESS.md](PROGRESS.md) how far it is, including anything currently broken. Until phases
+3 and 4 land, what is described below is the per-user behavior.
 
 ## Stack
 
@@ -11,7 +19,7 @@ letters, and track applications.
   is no password column.
 - Target platform: Google Cloud Platform in `europe-west3`. Cloud Run, Cloud SQL for
   PostgreSQL, Cloud Storage, Vertex AI, provisioned with Terraform rather than the
-  console. See [PLAN.md](PLAN.md) section 4.
+  console. See [PLAN.md](PLAN.md) section 8.
 
 ## Running the backend
 
@@ -56,10 +64,29 @@ Then open `http://localhost:5173` on your own computer. The Google OAuth redirec
 goes to `http://localhost:8000` on your computer, which the same forwarding carries to
 the backend. Without the forwarding, sign-in fails with a connection error.
 
-Schema changes are Alembic revisions. The Compose app runs
-`alembic upgrade head` before starting the API, so `docker compose up --build`
-creates or upgrades the schema automatically. For a one-off migration without
-starting the API, use `docker compose run --rm app alembic upgrade head`.
+Schema changes are Alembic revisions, generated and applied inside Compose (the
+host has no `db` hostname and Settings will not load `backend/.env` the same way).
+Compose bind-mounts `backend/app` and `backend/alembic`, so a revision file is
+written on the host. Edit the model, then:
+
+```
+docker compose exec app alembic revision --autogenerate -m "add some_new_field to jobs"
+```
+
+Check the new file in `backend/alembic/versions/`, then apply it:
+
+```
+docker compose exec app alembic upgrade head
+```
+
+The app also runs `alembic upgrade head` on startup. Rebuild the image only when
+`requirements.txt` or the Dockerfile change, not for a Python or migration edit.
+
+The code is bind-mounted but uvicorn does not reload, so a running process keeps the model
+it started with. After editing Python or adding a migration, run `docker compose restart
+app`. A process and a database that disagree about a table make every query on it fail,
+including the scheduler's, and the failure shows only in `backend/logs/app.log`. Check
+that `alembic current` and `alembic heads` print the same revision.
 
 Compose also runs Postgres 16 as `db` and a Cloud Storage emulator as `gcs`.
 `STORAGE_EMULATOR_HOST` in `backend/.env` points the storage client at the emulator.
@@ -90,10 +117,13 @@ fixture with `httpx.MockTransport`.
 
 ## Cloud
 
-Nothing is deployed. No GCP project exists yet and nothing is being billed. The design,
-the cost model and the credit constraints are in [PLAN.md](PLAN.md) section 4; the
-Terraform and commands that create each resource are in [BUILD.md](BUILD.md) phases 4,
-12 to 15.
+Nothing is deployed. The GCP project `cv-applier-ionescu-catalin` exists with its
+foundation (Terraform state bucket, budget alert, runtime service account; see
+[docs/cloud.md](docs/cloud.md)), but there is no Cloud SQL instance, no uploads bucket and
+no Cloud Run service, so all data lives in the local Docker volume until phase 2 of
+[BUILD.md](BUILD.md). The design, the cost model and the free-trial deadline are in
+[PLAN.md](PLAN.md) section 8; the Terraform and commands that create each resource are in
+BUILD.md phases 2, 7, 8 and 9.
 
 ## Docs
 
@@ -105,7 +135,6 @@ describe.
 - [Job sources](docs/sources.md)
 - [Frontend](docs/frontend.md)
 - [Cloud foundation](docs/cloud.md)
-- [How jobs are found and used](docs/how-it-works.md) (design, not built yet)
 - Design: [PLAN.md](PLAN.md)
 - Phase checklist: [BUILD.md](BUILD.md)
 - Live phase status: [PROGRESS.md](PROGRESS.md)

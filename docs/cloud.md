@@ -16,7 +16,7 @@ Terraform except project creation and billing linkage. Nothing chargeable exists
 - Project id `cv-applier-ionescu-catalin`, region `europe-west3`.
 - Runtime service account `cv-applier-run@cv-applier-ionescu-catalin.iam.gserviceaccount.com`
   with `cloudsql.client`, `aiplatform.user`, `secretmanager.secretAccessor`. The
-  `storage.objectAdmin` grant is added with the uploads bucket in phase 12.
+  `storage.objectAdmin` grant is added with the uploads bucket in phase 2.
 - Vertex AI is called with `genai.Client(vertexai=True, project=..., location="global")`.
   Credentials are Application Default Credentials; there are no key files. Locally that is
   `gcloud auth application-default login` plus `set-quota-project`.
