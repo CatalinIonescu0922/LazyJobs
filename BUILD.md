@@ -169,11 +169,19 @@ it. That is the point: the data stops depending on one disk.
 
 ### 2.1 The billing account
 
-Open Billing, Credits and write the trial's end date into [PROGRESS.md](PROGRESS.md). The
-trial ends by 2026-12-23 at the latest (PLAN.md section 2). Decide now to upgrade the
-billing account to a paid one before that date, keeping the $50 budget alert, because a
-database in a project whose trial has ended stops with it. The upgrade itself can be done
-any time before the end date, but it is part of this phase being done.
+Open the Billing overview. It says Free trial account or Paid account, and the Free credit
+pane shows the remaining credit and days with an Activate button. Write the trial's end
+date into [PROGRESS.md](PROGRESS.md); it is no later than 2026-12-23 (PLAN.md section 2).
+
+The trial never charges the card by itself. If it ends without an upgrade, billing is
+disabled on the project, everything is stopped, and after a 30-day grace period the
+resources and their data are permanently deleted, so a missed date costs the data and not
+money. Upgrading (Activate) before then keeps the resources running and keeps any unused
+credit until the original 90 days are up, so doing it early costs nothing extra. After
+that the card is charged for usage beyond the remaining credit, about $12 to $15 a month
+for this project. Decide to upgrade, with the $50 budget alert kept, before the end date.
+The click itself can wait until Cloud SQL is verified, but it is part of this phase being
+done.
 
 ### 2.2 Terraform
 

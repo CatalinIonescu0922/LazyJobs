@@ -604,10 +604,13 @@ Persistence is only as durable as three things:
   `pg_dump` taken before any risky migration. A backup that has never been restored is a
   hope, so phase 2 restores one into a scratch database.
 - **The process.** Nothing the app needs lives in a container or in memory (section 4).
-- **The billing account.** A trial that ends stops the project's billable resources. A
-  database in Cloud SQL is only as persistent as the billing account behind it, so
-  upgrading the billing account before the trial ends is part of phase 2, not a later
-  chore. The $50 budget alert stays in force.
+- **The billing account.** A trial never charges the card by itself. When it ends without
+  an upgrade, billing is disabled on the project, its resources are stopped, and after a
+  30-day grace period they are permanently deleted. A database in Cloud SQL is only as
+  persistent as the billing account behind it, so upgrading the billing account (the
+  Activate button on the Billing overview) is part of phase 2, not a later chore.
+  Upgrading keeps any unused credit until the original 90 days run out, so doing it early
+  costs nothing extra. The $50 budget alert stays in force.
 
 ### What runs where
 
